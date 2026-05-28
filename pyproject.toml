@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yolo26-app"
+version = "1.0.0"
+description = "YOLO26 Desktop App - Annotation, Training, and Inference"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["yolo", "yolo26", "object-detection", "pyqt6", "desktop-app"]
+authors = [
+    {name = "YOLO26 App Contributors"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+dependencies = [
+    "ultralytics>=8.0",
+    "PyQt6>=6.0",
+    "opencv-python>=4.6.0",
+    "numpy>=1.20.0",
+    "pyyaml>=5.3.1",
+]
+
+[project.optional-dependencies]
+realsense = ["pyrealsense2>=2.50.0"]
+
+[project.scripts]
+yolo26-app = "yolo26_app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["yolo26_app*"]
