@@ -20,12 +20,28 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QFileDialog,
     QMessageBox,
+    QScrollArea,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig
 from yolo26_app.core.trainer import YOLOTrainer
+
+MODEL_INFO = {
+    "n": "Nano | 3.2M 参数 | ≥2GB 显存 | 速度: ★★★★★",
+    "s": "Small | 11.2M 参数 | ≥4GB 显存 | 速度: ★★★★",
+    "m": "Medium | 25.9M 参数 | ≥8GB 显存 | 速度: ★★★",
+    "l": "Large | 43.7M 参数 | ≥12GB 显存 | 速度: ★★",
+    "x": "XLarge | 68.4M 参数 | ≥16GB 显存 | 速度: ★",
+}
+
+TASK_INFO = {
+    "detect": "目标检测 — 检测图中的目标并给出矩形框",
+    "segment": "实例分割 — 检测目标并生成精确像素掩码",
+    "classify": "图像分类 — 对整张图片进行类别分类",
+    "pose": "姿态估计 — 检测人体关键点和骨架",
+}
 
 
 class TrainWidget(QWidget):
@@ -45,9 +61,19 @@ class TrainWidget(QWidget):
         self.task_combo.addItems(["detect", "segment", "classify", "pose"])
         form.addRow("任务类型:", self.task_combo)
 
+        self._task_info_label = QLabel(TASK_INFO.get("detect", ""))
+        self._task_info_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._task_info_label.setWordWrap(True)
+        form.addRow("", self._task_info_label)
+
         self.size_combo = QComboBox()
         self.size_combo.addItems(["n", "s", "m", "l", "x"])
         form.addRow("模型大小:", self.size_combo)
+
+        self._model_info_label = QLabel(MODEL_INFO.get("n", ""))
+        self._model_info_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._model_info_label.setWordWrap(True)
+        form.addRow("", self._model_info_label)
 
         data_row = QHBoxLayout()
         self.data_edit = QLineEdit()
@@ -95,7 +121,18 @@ class TrainWidget(QWidget):
         form.addRow("早停耐心:", self.patience_spin)
 
         config_group.setLayout(form)
-        layout.addWidget(config_group)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.addWidget(config_group)
+        scroll_layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area)
+
+        self.size_combo.currentTextChanged.connect(self._update_model_info)
+        self.task_combo.currentTextChanged.connect(self._update_task_info)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
@@ -142,6 +179,12 @@ class TrainWidget(QWidget):
         self.results_group.setLayout(results_layout)
         self.results_group.hide()
         layout.addWidget(self.results_group)
+
+    def _update_model_info(self, size: str) -> None:
+        self._model_info_label.setText(MODEL_INFO.get(size, ""))
+
+    def _update_task_info(self, task: str) -> None:
+        self._task_info_label.setText(TASK_INFO.get(task, ""))
 
     def _browse_dataset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

@@ -25,6 +25,14 @@ class YOLOTrainer(QThread):
         self.project_path = project_path
         self._stop_flag = False
 
+    def _on_train_epoch_end(self, trainer) -> None:
+        if self._stop_flag:
+            trainer.stop_training = True
+            return
+        epoch = getattr(trainer, "epoch", 0) + 1
+        total = getattr(trainer, "epochs", self.config.epochs)
+        self.progress_signal.emit(epoch, total)
+
     def run(self) -> None:
         try:
             from ultralytics import YOLO
@@ -41,6 +49,8 @@ class YOLOTrainer(QThread):
             handler.setLevel(logging.INFO)
             logger = logging.getLogger("ultralytics")
             logger.addHandler(handler)
+
+            model.add_callback("on_train_epoch_end", self._on_train_epoch_end)
 
             project_dir = str(Path(self.project_path) / "runs")
             name = self.config.name or "train"

@@ -5,7 +5,7 @@ from typing import List, Optional, Union
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -28,7 +28,97 @@ from yolo26_app.core.predictor import YOLOPredictor
 from yolo26_app.core.realsense_camera import RealSenseCamera
 
 
+class _ValidateWorker(QThread):
+    done_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, predictor: YOLOPredictor, data_path: str) -> None:
+        super().__init__()
+        self.predictor = predictor
+        self.data_path = data_path
+
+    def run(self) -> None:
+        try:
+            result = self.predictor.validate_model(self.data_path)
+            self.done_signal.emit(result)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
+class _ExportWorker(QThread):
+    done_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, predictor: YOLOPredictor, format: str, output_dir: str) -> None:
+        super().__init__()
+        self.predictor = predictor
+        self.format = format
+        self.output_dir = output_dir
+
+    def run(self) -> None:
+        try:
+            exported_path = self.predictor.export_model(self.format, self.output_dir)
+            self.done_signal.emit(exported_path)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
+class _InferenceWorker(QThread):
+    result_signal = pyqtSignal(np.ndarray, object)
+
+    def __init__(self, predictor: YOLOPredictor, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._predictor = predictor
+        self._mutex = QMutex()
+        self._cond = QWaitCondition()
+        self._frame: Optional[np.ndarray] = None
+        self._conf: float = 0.25
+        self._busy: bool = False
+        self._stop_flag: bool = False
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def submit(self, frame: np.ndarray, conf: float) -> None:
+        self._mutex.lock()
+        self._frame = frame.copy()
+        self._conf = conf
+        self._busy = True
+        self._cond.wakeOne()
+        self._mutex.unlock()
+
+    def stop(self) -> None:
+        self._mutex.lock()
+        self._stop_flag = True
+        self._cond.wakeOne()
+        self._mutex.unlock()
+        self.wait()
+
+    def run(self) -> None:
+        while True:
+            self._mutex.lock()
+            while self._frame is None and not self._stop_flag:
+                self._cond.wait(self._mutex)
+            if self._stop_flag:
+                self._mutex.unlock()
+                break
+            frame = self._frame
+            conf = self._conf
+            self._frame = None
+            self._mutex.unlock()
+
+            annotated, results = self._predictor.predict_frame(frame, conf=conf)
+            self.result_signal.emit(annotated, results)
+
+            self._mutex.lock()
+            self._busy = False
+            self._mutex.unlock()
+
+
 class TestWidget(QWidget):
+    model_loaded = pyqtSignal(object)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.predictor = YOLOPredictor()
@@ -42,7 +132,14 @@ class TestWidget(QWidget):
         self._show_depth = False
         self._batch_images: List[str] = []
         self._batch_index: int = 0
+        self._inference_worker = _InferenceWorker(self.predictor)
+        self._inference_worker.result_signal.connect(self._on_inference_result)
+        self._inference_worker.start()
         self._init_ui()
+
+    def __del__(self) -> None:
+        if self._inference_worker.isRunning():
+            self._inference_worker.stop()
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -53,7 +150,7 @@ class TestWidget(QWidget):
 
         path_layout = QHBoxLayout()
         self.model_path_edit = QLineEdit()
-        self.model_path_edit.setPlaceholderText("选择 .pt 模型文件")
+        self.model_path_edit.setPlaceholderText("选择模型文件 (.pt/.onnx/.torchscript/.xml/.engine)")
         path_layout.addWidget(self.model_path_edit)
         self.browse_btn = QPushButton("浏览")
         self.browse_btn.clicked.connect(self._on_browse_model)
@@ -191,7 +288,7 @@ class TestWidget(QWidget):
                 self.model_path_edit.setText(str(best_paths[0]))
 
     def _on_browse_model(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择模型文件", "", "模型文件 (*.pt)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型文件", "", "模型文件 (*.pt *.onnx *.torchscript *.xml *.engine);;PyTorch (*.pt);;ONNX (*.onnx);;TorchScript (*.torchscript);;OpenVINO (*.xml);;TensorRT (*.engine);;所有文件 (*)")
         if path:
             self.model_path_edit.setText(path)
 
@@ -207,11 +304,19 @@ class TestWidget(QWidget):
             info = self.predictor.get_model_info()
             task = info.get("task", "unknown")
             names = info.get("class_names", [])
-            msg = f"模型加载成功\n任务类型: {task}\n类别数: {len(names)}"
+            ext = Path(path).suffix.lower()
+            format_names = {
+                ".pt": "PyTorch", ".onnx": "ONNX",
+                ".torchscript": "TorchScript", ".xml": "OpenVINO",
+                ".engine": "TensorRT",
+            }
+            model_format = format_names.get(ext, ext)
+            msg = f"模型加载成功\n格式: {model_format}\n任务类型: {task}\n类别数: {len(names)}"
             if names:
                 msg += f"\n类别: {', '.join(names[:10])}"
                 if len(names) > 10:
                     msg += "..."
+            self.model_loaded.emit(self.predictor.model)
             QMessageBox.information(self, "成功", msg)
         else:
             QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
@@ -310,6 +415,8 @@ class TestWidget(QWidget):
         self._batch_index = 0
         self.prev_btn.setVisible(False)
         self.next_btn.setVisible(False)
+        if not self._inference_worker.isRunning():
+            self._inference_worker.start()
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             QMessageBox.warning(self, "警告", "无法打开视频源")
@@ -344,6 +451,8 @@ class TestWidget(QWidget):
         self._batch_index = 0
         self.prev_btn.setVisible(False)
         self.next_btn.setVisible(False)
+        if not self._inference_worker.isRunning():
+            self._inference_worker.start()
         serial = self.rs_device_combo.currentData()
         if serial is None:
             QMessageBox.warning(self, "警告", "请先选择一个 RealSense 设备")
@@ -365,10 +474,21 @@ class TestWidget(QWidget):
     def _on_depth_check_toggled(self, checked: bool) -> None:
         self._show_depth = checked
 
+    def _on_inference_result(self, annotated: np.ndarray, results: object) -> None:
+        if annotated is not None and annotated.size > 0:
+            self._display_np_image(annotated)
+        count = 0
+        try:
+            if results is not None:
+                count = len(results.boxes)
+        except Exception:
+            count = 0
+        self.det_count_label.setText(f"检测数量: {count}")
+        self.fps_label.setText(f"FPS: {self._fps:.1f}")
+
     def _on_timer_timeout(self) -> None:
         frame = None
         depth_np = None
-        results = None
         if self.rs_camera.running:
             color_np, depth_np = self.rs_camera.get_frames()
             if color_np is None:
@@ -384,7 +504,6 @@ class TestWidget(QWidget):
             self._on_stop()
             return
 
-        conf = self.conf_spin.value()
         current_time = time.time()
         delta = current_time - self._last_frame_time
         if delta > 0:
@@ -396,26 +515,18 @@ class TestWidget(QWidget):
             if colorized is not None:
                 self._display_np_image(colorized)
             else:
-                annotated, results = self.predictor.predict_frame(frame, conf=conf)
-                if annotated is not None and annotated.size > 0:
-                    self._display_np_image(annotated)
+                if not self._inference_worker.is_busy:
+                    self._inference_worker.submit(frame, self.conf_spin.value())
         else:
-            annotated, results = self.predictor.predict_frame(frame, conf=conf)
-            if annotated is not None and annotated.size > 0:
-                self._display_np_image(annotated)
-
-        count = 0
-        if not self._show_depth:
-            try:
-                if results is not None:
-                    count = len(results.boxes)
-            except Exception:
-                count = 0
-        self.det_count_label.setText(f"检测数量: {count}")
-        self.fps_label.setText(f"FPS: {self._fps:.1f}")
+            if self._inference_worker.is_busy:
+                self.fps_label.setText(f"FPS: {self._fps:.1f}")
+            else:
+                self._inference_worker.submit(frame, self.conf_spin.value())
 
     def _on_stop(self) -> None:
         self.timer.stop()
+        if self._inference_worker.isRunning():
+            self._inference_worker.stop()
         if self.cap is not None:
             self.cap.release()
             self.cap = None
@@ -446,7 +557,12 @@ class TestWidget(QWidget):
             return
         self.validate_btn.setEnabled(False)
         self.validate_btn.setText("验证中...")
-        metrics = self.predictor.validate_model(data_path)
+        self._validate_worker = _ValidateWorker(self.predictor, data_path)
+        self._validate_worker.done_signal.connect(self._on_validate_done)
+        self._validate_worker.error_signal.connect(self._on_validate_error)
+        self._validate_worker.start()
+
+    def _on_validate_done(self, metrics: dict) -> None:
         self.validate_btn.setEnabled(True)
         self.validate_btn.setText("验证模型")
         if metrics:
@@ -455,6 +571,11 @@ class TestWidget(QWidget):
             self.val_result_group.setVisible(True)
         else:
             QMessageBox.warning(self, "警告", "模型验证失败，请检查数据集配置")
+
+    def _on_validate_error(self, msg: str) -> None:
+        self.validate_btn.setEnabled(True)
+        self.validate_btn.setText("验证模型")
+        QMessageBox.warning(self, "警告", f"模型验证出错:\n{msg}")
 
     def _on_export_clicked(self) -> None:
         if self.predictor.model is None:
@@ -473,7 +594,12 @@ class TestWidget(QWidget):
             return
         self.confirm_export_btn.setEnabled(False)
         self.confirm_export_btn.setText("导出中...")
-        exported_path = self.predictor.export_model(fmt, output_dir)
+        self._export_worker = _ExportWorker(self.predictor, fmt, output_dir)
+        self._export_worker.done_signal.connect(self._on_export_done)
+        self._export_worker.error_signal.connect(self._on_export_error)
+        self._export_worker.start()
+
+    def _on_export_done(self, exported_path: str) -> None:
         self.confirm_export_btn.setEnabled(True)
         self.confirm_export_btn.setText("确认导出")
         if exported_path:
@@ -481,6 +607,11 @@ class TestWidget(QWidget):
             self.export_settings_group.setVisible(False)
         else:
             QMessageBox.critical(self, "错误", "模型导出失败")
+
+    def _on_export_error(self, msg: str) -> None:
+        self.confirm_export_btn.setEnabled(True)
+        self.confirm_export_btn.setText("确认导出")
+        QMessageBox.critical(self, "错误", f"模型导出出错:\n{msg}")
 
     def _display_np_image(self, image_np: np.ndarray) -> None:
         if image_np.ndim == 2:

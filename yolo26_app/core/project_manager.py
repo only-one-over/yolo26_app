@@ -97,3 +97,7 @@ class ProjectManager:
     @staticmethod
     def get_models_dir(config: ProjectConfig) -> Path:
         return Path(config.project_path) / "models"
+
+    @staticmethod
+    def get_annotations_path(config: ProjectConfig) -> Path:
+        return Path(config.project_path) / "annotations.json"

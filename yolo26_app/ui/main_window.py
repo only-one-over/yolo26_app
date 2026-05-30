@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
@@ -21,7 +23,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QCloseEvent
 
 from yolo26_app.core.config import ProjectConfig
 from yolo26_app.core.project_manager import ProjectManager
@@ -29,6 +31,9 @@ from yolo26_app.ui.styles import DARK_STYLE
 from yolo26_app.ui.annotate_widget import AnnotateWidget
 from yolo26_app.ui.train_widget import TrainWidget
 from yolo26_app.ui.test_widget import TestWidget
+
+APP_STATE_DIR = Path.home() / ".yolo26_app"
+APP_STATE_FILE = APP_STATE_DIR / "app_state.json"
 
 
 class NewProjectDialog(QDialog):
@@ -85,6 +90,7 @@ class MainWindow(QMainWindow):
         self._init_menu()
         self._init_statusbar()
         self._apply_style()
+        self._restore_app_state()
 
     def _init_ui(self) -> None:
         central = QWidget()
@@ -122,6 +128,8 @@ class MainWindow(QMainWindow):
         self.annotate_widget = AnnotateWidget()
         self.train_widget = TrainWidget()
         self.test_widget = TestWidget()
+
+        self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
 
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.annotate_widget)
@@ -173,9 +181,71 @@ class MainWindow(QMainWindow):
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("就绪")
+        self._device_label = QLabel()
+        self._device_label.setObjectName("deviceLabel")
+        self.statusbar.addPermanentWidget(self._device_label)
+        self._update_device_status()
+
+    def _update_device_status(self) -> None:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                name = torch.cuda.get_device_name(0)
+                self._device_label.setText(f"🟢 GPU: {name}")
+            else:
+                self._device_label.setText("🔴 CPU")
+        except ImportError:
+            self._device_label.setText("🔴 CPU")
 
     def _apply_style(self) -> None:
         self.setStyleSheet(DARK_STYLE)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_app_state()
+        event.accept()
+
+    def _save_app_state(self) -> None:
+        state = {
+            "geometry": {
+                "x": self.x(),
+                "y": self.y(),
+                "width": self.width(),
+                "height": self.height(),
+            },
+        }
+        if self.current_project_config is not None:
+            state["last_project_path"] = self.current_project_config.project_path
+            annotate_state = self.annotate_widget.save_state()
+            state["annotate_state"] = annotate_state
+        try:
+            APP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+            with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        except (PermissionError, OSError):
+            pass
+
+    def _restore_app_state(self) -> None:
+        if not APP_STATE_FILE.exists():
+            return
+        try:
+            with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+        geo = state.get("geometry")
+        if geo:
+            self.setGeometry(geo.get("x", 100), geo.get("y", 100),
+                             geo.get("width", 1280), geo.get("height", 800))
+        last_project = state.get("last_project_path")
+        if last_project and Path(last_project).exists():
+            try:
+                config = ProjectManager.open_project(last_project)
+                self._set_project_config(config)
+            except Exception:
+                pass
+        annotate_state = state.get("annotate_state")
+        if annotate_state:
+            self.annotate_widget.restore_state(annotate_state)
 
     def _new_project(self) -> None:
         dialog = NewProjectDialog(self)

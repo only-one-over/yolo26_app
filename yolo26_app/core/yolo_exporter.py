@@ -17,6 +17,7 @@ class YOLOExporter:
         classes: List[ClassItem],
         output_dir: str,
         train_ratio: float = 0.8,
+        task: str = "detect",
     ) -> Tuple[str, Dict]:
         out = Path(output_dir)
         dirs = {
@@ -25,6 +26,9 @@ class YOLOExporter:
             "train_lbl": out / "labels" / "train",
             "val_lbl": out / "labels" / "val",
         }
+
+        if out.exists():
+            shutil.rmtree(out)
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)
 
@@ -60,6 +64,9 @@ class YOLOExporter:
                     skipped_count += 1
                     continue
                 img_h, img_w = img.shape[:2]
+                if img_w <= 0 or img_h <= 0:
+                    skipped_count += 1
+                    continue
 
                 label_name = img_path.stem + ".txt"
                 label_path = lbl_dir / label_name
@@ -67,17 +74,51 @@ class YOLOExporter:
                 lines: List[str] = []
                 for ann in anns:
                     if ann.item_type == "rect":
-                        cx = (ann.rect.x() + ann.rect.width() / 2) / img_w
-                        cy = (ann.rect.y() + ann.rect.height() / 2) / img_h
-                        w = ann.rect.width() / img_w
-                        h = ann.rect.height() / img_h
-                        lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                        w = ann.rect.width()
+                        h = ann.rect.height()
+                        if w < 1 or h < 1:
+                            continue
+                        cx = (ann.rect.x() + w / 2) / img_w
+                        cy = (ann.rect.y() + h / 2) / img_h
+                        nw = w / img_w
+                        nh = h / img_h
+                        cx = max(0.0, min(1.0, cx))
+                        cy = max(0.0, min(1.0, cy))
+                        nw = max(0.0, min(1.0, nw))
+                        nh = max(0.0, min(1.0, nh))
+                        if nw <= 0 or nh <= 0:
+                            continue
+                        lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
                     elif ann.item_type == "polygon":
-                        coords: List[str] = [str(ann.class_index)]
-                        for pt in ann.polygon:
-                            coords.append(f"{pt.x() / img_w:.6f}")
-                            coords.append(f"{pt.y() / img_h:.6f}")
-                        lines.append(" ".join(coords))
+                        if ann.polygon.size() < 3:
+                            continue
+                        if task == "segment":
+                            coords: List[str] = [str(ann.class_index)]
+                            for pt in ann.polygon:
+                                coords.append(f"{max(0.0, min(1.0, pt.x() / img_w)):.6f}")
+                                coords.append(f"{max(0.0, min(1.0, pt.y() / img_h)):.6f}")
+                            lines.append(" ".join(coords))
+                        else:
+                            bbox = ann.polygon.boundingRect()
+                            w = bbox.width()
+                            h = bbox.height()
+                            if w < 1 or h < 1:
+                                continue
+                            cx = (bbox.x() + w / 2) / img_w
+                            cy = (bbox.y() + h / 2) / img_h
+                            nw = w / img_w
+                            nh = h / img_h
+                            cx = max(0.0, min(1.0, cx))
+                            cy = max(0.0, min(1.0, cy))
+                            nw = max(0.0, min(1.0, nw))
+                            nh = max(0.0, min(1.0, nh))
+                            if nw <= 0 or nh <= 0:
+                                continue
+                            lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+
+                if not lines:
+                    skipped_count += 1
+                    continue
 
                 label_path.write_text("\n".join(lines), encoding="utf-8")
                 processed += 1
