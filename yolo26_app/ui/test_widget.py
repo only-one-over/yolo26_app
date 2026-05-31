@@ -94,6 +94,11 @@ class _InferenceWorker(QThread):
         self._cond.wakeOne()
         self._mutex.unlock()
         self.wait()
+        self._mutex.lock()
+        self._stop_flag = False
+        self._frame = None
+        self._busy = False
+        self._mutex.unlock()
 
     def run(self) -> None:
         while True:
@@ -108,7 +113,11 @@ class _InferenceWorker(QThread):
             self._frame = None
             self._mutex.unlock()
 
-            annotated, results = self._predictor.predict_frame(frame, conf=conf)
+            try:
+                annotated, results = self._predictor.predict_frame(frame, conf=conf)
+            except Exception:
+                annotated = frame
+                results = None
             self.result_signal.emit(annotated, results)
 
             self._mutex.lock()
@@ -134,7 +143,7 @@ class TestWidget(QWidget):
         self._batch_index: int = 0
         self._inference_worker = _InferenceWorker(self.predictor)
         self._inference_worker.result_signal.connect(self._on_inference_result)
-        self._inference_worker.start()
+        self._last_frame: Optional[np.ndarray] = None
         self._init_ui()
 
     def __del__(self) -> None:
@@ -398,6 +407,9 @@ class TestWidget(QWidget):
             self._show_batch_image()
 
     def _on_select_video(self) -> None:
+        if self.predictor.model is None:
+            QMessageBox.warning(self, "警告", "请先加载模型")
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "选择视频", "",
             "视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv)"
@@ -407,6 +419,9 @@ class TestWidget(QWidget):
         self._start_capture(path)
 
     def _on_open_camera(self) -> None:
+        if self.predictor.model is None:
+            QMessageBox.warning(self, "警告", "请先加载模型")
+            return
         self._start_capture(0)
 
     def _start_capture(self, source: Union[str, int]) -> None:
@@ -446,6 +461,9 @@ class TestWidget(QWidget):
         self.rs_camera_btn.setEnabled(True)
 
     def _on_open_rs_camera(self) -> None:
+        if self.predictor.model is None:
+            QMessageBox.warning(self, "警告", "请先加载模型")
+            return
         self._on_stop()
         self._batch_images = []
         self._batch_index = 0
@@ -477,6 +495,8 @@ class TestWidget(QWidget):
     def _on_inference_result(self, annotated: np.ndarray, results: object) -> None:
         if annotated is not None and annotated.size > 0:
             self._display_np_image(annotated)
+        elif self._last_frame is not None and self._last_frame.size > 0:
+            self._display_np_image(self._last_frame)
         count = 0
         try:
             if results is not None:
@@ -495,11 +515,13 @@ class TestWidget(QWidget):
                 self._on_stop()
                 return
             frame = color_np
+            self._last_frame = frame
         elif self.cap is not None and self.cap.isOpened():
             ret, frame = self.cap.read()
             if not ret:
                 self._on_stop()
                 return
+            self._last_frame = frame
         else:
             self._on_stop()
             return
@@ -620,9 +642,10 @@ class TestWidget(QWidget):
             image_np = cv2.cvtColor(image_np, cv2.COLOR_BGRA2RGB)
         elif image_np.shape[2] == 3:
             image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+        image_np = np.ascontiguousarray(image_np)
         h, w, ch = image_np.shape
         bytes_per_line = ch * w
-        q_img = QImage(image_np.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        q_img = QImage(image_np.copy(), w, h, bytes_per_line, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(q_img)
         scaled = pixmap.scaled(
             self.result_label.size(),

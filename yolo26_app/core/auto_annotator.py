@@ -98,7 +98,18 @@ class YOLOPreAnnotator:
 
 
 class SAMAnnotator:
-    """使用 SAM/MobileSAM 进行交互式分割标注"""
+    """使用 SAM 2 进行交互式分割标注"""
+
+    _SAM2_CONFIG_MAP = {
+        "sam2.1_hiera_t": "configs/sam2.1/sam2.1_hiera_t.yaml",
+        "sam2.1_hiera_s": "configs/sam2.1/sam2.1_hiera_s.yaml",
+        "sam2.1_hiera_b+": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+        "sam2.1_hiera_l": "configs/sam2.1/sam2.1_hiera_l.yaml",
+        "sam2_hiera_t": "configs/sam2/sam2_hiera_t.yaml",
+        "sam2_hiera_s": "configs/sam2/sam2_hiera_s.yaml",
+        "sam2_hiera_b+": "configs/sam2/sam2_hiera_b+.yaml",
+        "sam2_hiera_l": "configs/sam2/sam2_hiera_l.yaml",
+    }
 
     def __init__(self) -> None:
         self._predictor = None
@@ -107,9 +118,10 @@ class SAMAnnotator:
 
     def _init_sam(self) -> None:
         try:
-            from segment_anything import sam_model_registry, SamPredictor
-            self._sam_registry = sam_model_registry
-            self._sam_predictor_cls = SamPredictor
+            from sam2.build_sam import build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+            self._build_sam2 = build_sam2
+            self._predictor_cls = SAM2ImagePredictor
             self._available = True
         except ImportError:
             self._available = False
@@ -119,87 +131,26 @@ class SAMAnnotator:
         return self._available
 
     @staticmethod
-    def scan_model_file(directory: str) -> Optional[Tuple[str, str]]:
-        patterns = [
-            ("sam_vit_h", "vit_h"),
-            ("sam_vit_l", "vit_l"),
-            ("sam_vit_b", "vit_b"),
-            ("mobile_sam", "vit_t"),
-        ]
-        for prefix, model_type in patterns:
+    def scan_model_file(directory: str) -> Optional[Tuple[str, str, str]]:
+        for prefix, config_path in SAMAnnotator._SAM2_CONFIG_MAP.items():
             for ext in (".pt", ".pth"):
                 pattern = os.path.join(directory, f"{prefix}*{ext}")
                 matches = _glob.glob(pattern)
                 if matches:
-                    return matches[0], model_type
+                    return matches[0], prefix, config_path
         return None
 
-    def load_model(self, model_path: str, model_type: str = "vit_b", device: str = "cuda") -> bool:
+    def load_model(self, model_path: str, config_path: str, device: str = "cuda") -> bool:
         if not self._available:
             return False
         try:
             import torch
-            sam = self._sam_registry[model_type](checkpoint=model_path)
-            sam.to(device=device)
-            self._predictor = self._sam_predictor_cls(sam)
+            sam = self._build_sam2(config_path, model_path, device=device)
+            self._predictor = self._predictor_cls(sam)
             return True
         except Exception as e:
-            logger.error(f"SAM 模型加载失败: {e}")
+            logger.error(f"SAM 2 模型加载失败: {e}")
             return False
-
-    def set_image(self, image: np.ndarray) -> None:
-        if self._predictor is not None:
-            self._predictor.set_image(image)
-
-    def predict(self, point_coords: np.ndarray, point_labels: np.ndarray) -> List[AnnotationItem]:
-        """
-        根据点击坐标生成分割标注
-
-        Args:
-            point_coords: Nx2 数组，点击坐标 [[x1,y1], [x2,y2], ...]
-            point_labels: N 数组，1=前景点，0=背景点
-
-        Returns:
-            包含多边形标注的 AnnotationItem 列表
-        """
-        if self._predictor is None:
-            return []
-
-        try:
-            masks, scores, _ = self._predictor.predict(
-                point_coords=point_coords,
-                point_labels=point_labels,
-                multimask_output=True,
-            )
-
-            best_idx = np.argmax(scores)
-            mask = masks[best_idx].astype(np.uint8)
-
-            h, w = mask.shape
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                return []
-
-            largest = max(contours, key=cv2.contourArea)
-            epsilon = 0.005 * cv2.arcLength(largest, True)
-            approx = cv2.approxPolyDP(largest, epsilon, True)
-
-            points: List[QPointF] = []
-            for pt in approx:
-                points.append(QPointF(float(pt[0][0]), float(pt[0][1])))
-
-            if len(points) >= 3:
-                return [AnnotationItem(
-                    class_index=0,
-                    polygon=QPolygonF(points),
-                    item_type="polygon",
-                )]
-
-            return []
-
-        except Exception as e:
-            logger.error(f"SAM 分割失败: {e}")
-            return []
 
 
 class VideoTracker:

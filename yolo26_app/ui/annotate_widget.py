@@ -198,7 +198,7 @@ class AnnotateWidget(QWidget):
         self._scene._sam_encoding = True
         window = self.window()
         if hasattr(window, "statusbar"):
-            window.statusbar.showMessage("SAM 正在编码图像...")
+            window.statusbar.showMessage("SAM 2 正在编码图像...")
         self._sam_worker = _SamWorker(self._sam_annotator._predictor, task="encode", image=image)
         self._sam_worker.encoding_done.connect(self._on_sam_encode_done)
         self._sam_worker.error_occurred.connect(self._on_sam_error)
@@ -217,7 +217,7 @@ class AnnotateWidget(QWidget):
         labels_np = np.array(labels)
         window = self.window()
         if hasattr(window, "statusbar"):
-            window.statusbar.showMessage("SAM 正在预测...")
+            window.statusbar.showMessage("SAM 2 正在预测...")
         if self._sam_worker is not None and self._sam_worker.isRunning():
             self._sam_worker.quit()
             self._sam_worker.wait()
@@ -236,7 +236,7 @@ class AnnotateWidget(QWidget):
         self._scene._sam_encoding = False
         window = self.window()
         if hasattr(window, "statusbar"):
-            window.statusbar.showMessage("SAM 编码完成，可以开始标注")
+            window.statusbar.showMessage("SAM 2 编码完成，可以开始标注")
 
     def _on_sam_predict_done(self, result) -> None:
         masks, scores, logits = result
@@ -251,7 +251,7 @@ class AnnotateWidget(QWidget):
         self._scene._sam_encoding = False
         window = self.window()
         if hasattr(window, "statusbar"):
-            window.statusbar.showMessage(f"SAM 错误: {error_msg}")
+            window.statusbar.showMessage(f"SAM 2 错误: {error_msg}")
 
     def _setup_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -469,6 +469,17 @@ class AnnotateWidget(QWidget):
             self._annotations_dict[self._current_image_path] = self._scene.get_annotations()
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Up:
+            row = self._image_list_widget.currentRow()
+            if row > 0:
+                self._image_list_widget.setCurrentRow(row - 1)
+            return
+        elif event.key() == Qt.Key.Key_Down:
+            row = self._image_list_widget.currentRow()
+            if row < self._image_list_widget.count() - 1:
+                self._image_list_widget.setCurrentRow(row + 1)
+            return
+
         if self._scene.current_tool == "sam":
             if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
                 self._sam_predict_async()
@@ -563,8 +574,8 @@ class AnnotateWidget(QWidget):
         if not sam.available:
             QMessageBox.information(
                 self, "提示",
-                "请先安装 SAM:\npip install segment-anything\n\n"
-                "并下载模型权重:\nhttps://github.com/facebookresearch/segment-anything#model-checkpoints"
+                "请先安装 SAM 2:\npip install sam2\n\n"
+                "并下载模型权重:\nhttps://github.com/facebookresearch/segment-anything-2#download-checkpoints"
             )
             return
         if sam._predictor is None:
@@ -577,42 +588,47 @@ class AnnotateWidget(QWidget):
                 if model_info:
                     break
             if model_info:
-                model_path, model_type = model_info
+                model_path, model_type, config_path = model_info
             else:
                 start_dir = scan_dirs[0] if scan_dirs else ""
                 model_path, _ = QFileDialog.getOpenFileName(
-                    self, "选择 SAM 模型权重", start_dir, "PyTorch Weights (*.pt *.pth)"
+                    self, "选择 SAM 2 模型权重", start_dir, "PyTorch Weights (*.pt *.pth)"
                 )
                 if not model_path:
                     return
-                model_type = "vit_b"
-                if "vit_h" in model_path:
-                    model_type = "vit_h"
-                elif "vit_l" in model_path:
-                    model_type = "vit_l"
-                elif "mobile_sam" in model_path.lower():
-                    model_type = "vit_t"
+                config_path = "configs/sam2.1/sam2.1_hiera_s.yaml"
+                model_type = "sam2.1_hiera_s"
+                filename = os.path.basename(model_path).lower()
+                if "hiera_l" in filename or "hiera-large" in filename:
+                    config_path = "configs/sam2.1/sam2.1_hiera_l.yaml"
+                    model_type = "sam2.1_hiera_l"
+                elif "hiera_b" in filename or "hiera-base" in filename:
+                    config_path = "configs/sam2.1/sam2.1_hiera_b+.yaml"
+                    model_type = "sam2.1_hiera_b+"
+                elif "hiera_t" in filename or "hiera-tiny" in filename:
+                    config_path = "configs/sam2.1/sam2.1_hiera_t.yaml"
+                    model_type = "sam2.1_hiera_t"
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
             window = self.window()
             if hasattr(window, "statusbar"):
-                window.statusbar.showMessage("SAM 正在加载模型...")
+                window.statusbar.showMessage("SAM 2 正在加载模型...")
             QApplication.processEvents()
-            if not sam.load_model(model_path, model_type, device):
+            if not sam.load_model(model_path, config_path, device):
                 QMessageBox.critical(self, "错误", "SAM 模型加载失败")
                 if hasattr(window, "statusbar"):
                     window.statusbar.showMessage("就绪")
                 return
             if hasattr(window, "statusbar"):
-                window.statusbar.showMessage("SAM 模型加载完成")
+                window.statusbar.showMessage("SAM 2 模型加载完成")
         self._scene.set_sam_annotator(sam)
         self._scene.set_tool("sam")
         self._sam_set_image_async(self._current_image_path)
         if not self._sam_instructions_shown:
             self._sam_instructions_shown = True
             QMessageBox.information(
-                self, "SAM 分割",
-                "已进入 SAM 分割模式\n\n"
+                self, "SAM 2 分割",
+                "已进入 SAM 2 分割模式\n\n"
                 "左键点击 = 前景点（绿色）\n"
                 "右键点击 = 背景点（红色）\n"
                 "按 Enter 键确认分割\n"
@@ -752,10 +768,26 @@ class AnnotateWidget(QWidget):
         if not output_dir:
             return
 
+        has_polygon = any(
+            a.item_type == "polygon"
+            for anns in self._annotations_dict.values()
+            for a in anns
+        )
         task = "detect"
-        window = self.window()
-        if hasattr(window, "train_widget"):
-            task = window.train_widget.task_combo.currentText()
+        if has_polygon:
+            items = ["detect — 多边形自动转为矩形框", "segment — 保留多边形用于分割训练"]
+            item, ok = QInputDialog.getItem(
+                self, "选择导出格式",
+                "检测到多边形标注，请选择导出格式：",
+                items, 0, False,
+            )
+            if not ok:
+                return
+            task = "segment" if "segment" in item else "detect"
+        else:
+            window = self.window()
+            if hasattr(window, "train_widget"):
+                task = window.train_widget.task_combo.currentText()
 
         try:
             yaml_path, stats = YOLOExporter.export_dataset(

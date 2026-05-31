@@ -23,13 +23,15 @@
 |---------|-------------|
 | **Bounding Box** | Drag to draw detection boxes with any aspect ratio |
 | **Polygon** | Click to add points, double-click to complete polygon |
-| **SAM Segmentation** | Click target area to auto-generate segmentation masks, supports ViT-H/L/B/T |
+| **SAM 2 Interactive Segmentation** | Click target area to auto-generate segmentation masks, supports SAM 2 models (Hiera-T/S/B+/L) |
 | **YOLO Pre-annotation** | Auto-annotate with trained model + class mapping dialog |
 | **Grounding DINO** | Zero-shot detection via text prompts (e.g. "person, car") |
 | **Video Tracking** | Auto-track annotations across video frames, supports CSRT/KCF/MIL |
 | **Batch Detection** | Background thread with progress dialog and cancel support |
 | **Undo/Redo** | Ctrl+Z undo, Ctrl+Shift+Z redo, up to 50 steps |
 | **Auto-persistence** | Annotations auto-saved to annotations.json, auto-restored on reopen |
+| **Keyboard Shortcuts** | ↑↓ keys to quickly navigate between images |
+| **Custom Experiment Name** | Customize experiment name during training to distinguish different runs |
 | **Class Name Display** | Show class names (e.g. "person") instead of indices |
 | **Incremental Rendering** | O(1) updates on add/select, no full redraw |
 
@@ -125,6 +127,23 @@ output_dir/
 
 ## 🚀 Quick Start
 
+## 📦 Resources & Downloads
+
+### Required Dependencies
+| Resource | Link | Description |
+|----------|------|-------------|
+| PyTorch | https://pytorch.org/get-started/locally/ | Required for GPU-accelerated inference, install CUDA version |
+| CUDA Toolkit | https://developer.nvidia.com/cuda-toolkit-archive | GPU support, version must match PyTorch |
+| Ultralytics | https://docs.ultralytics.com/ | YOLO model framework |
+
+### Optional Dependencies
+| Resource | Link | Description |
+|----------|------|-------------|
+| SAM 2 | https://github.com/facebookresearch/sam2 | Interactive segmentation annotation |
+| SAM 2 Model Weights | https://github.com/facebookresearch/segment-anything-2#download-checkpoints | Recommended: sam2.1_hiera_small.pt (184MB) |
+| Grounding DINO | https://github.com/IDEA-Research/GroundingDINO | Text-driven zero-shot detection |
+| Grounding DINO Weights | https://github.com/IDEA-Research/GroundingDINO#model-zoo | groundingdino_swint_ogc.pth |
+
 ### Requirements
 
 - Python 3.9+
@@ -173,8 +192,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 # Intel RealSense depth camera
 pip install pyrealsense2
 
-# SAM segmentation
-pip install segment-anything
+# SAM 2 segmentation
+pip install sam2
 
 # Grounding DINO text detection
 pip install groundingdino
@@ -256,10 +275,10 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 3. Class mapping dialog appears
 4. Annotations auto-generated after confirmation
 
-**SAM Segmentation:**
+**SAM 2 Interactive Segmentation:**
 1. Switch to SAM tool mode
 2. Click target area to generate mask
-3. Supports ViT-Huge / ViT-Large / ViT-Base / MobileSAM
+3. Supports SAM 2 models: sam2.1_hiera_tiny / sam2.1_hiera_small / sam2.1_hiera_base_plus / sam2.1_hiera_large
 
 **Grounding DINO Text Detection:**
 1. Click "Text Detection"
@@ -521,7 +540,7 @@ names: ['person', 'car']
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| SAM load failed | SAM not installed or weights missing | Install `segment-anything`, download SAM weights |
+| SAM 2 load failed | SAM 2 not installed or weights missing | Install `sam2`, download SAM 2 weights (sam2.1_hiera_*.pt) |
 | Annotations lost | Old version in-memory only | New version auto-persists to annotations.json |
 | Canvas lag | Full redraw on many annotations | New version uses incremental rendering |
 

@@ -218,24 +218,6 @@ class AnnotationScene(QGraphicsScene):
         self.addItem(item)
         self._temp_sam_items.append(item)
 
-    def run_sam_prediction(self) -> None:
-        if self._sam_encoding or self._sam_annotator is None or not self._sam_points:
-            return
-        import numpy as np
-        coords = np.array([[p.x(), p.y()] for p in self._sam_points])
-        labels = np.array(self._sam_labels)
-        results = self._sam_annotator.predict(coords, labels)
-        self.clear_sam_points()
-        for ann in results:
-            ann.class_index = self._current_class_index
-            self._annotations.append(ann)
-            self._draw_annotation(ann, len(self._annotations) - 1)
-            self._undo_stack.append(("add", len(self._annotations) - 1, ann))
-            self._redo_stack.clear()
-            if len(self._undo_stack) > 50:
-                self._undo_stack.pop(0)
-        self.annotations_changed.emit()
-
     def get_sam_input_points(self):
         if not self._sam_points:
             return None, None

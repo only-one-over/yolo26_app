@@ -120,6 +120,10 @@ class TrainWidget(QWidget):
         self.patience_spin.setValue(100)
         form.addRow("早停耐心:", self.patience_spin)
 
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("train")
+        form.addRow("实验名称:", self.name_edit)
+
         config_group.setLayout(form)
 
         scroll_area = QScrollArea()
@@ -205,6 +209,7 @@ class TrainWidget(QWidget):
             optimizer=self.optimizer_combo.currentText(),
             lr0=self.lr_spin.value(),
             patience=self.patience_spin.value(),
+            name=self.name_edit.text().strip(),
         )
 
     def _set_form_enabled(self, enabled: bool) -> None:
@@ -218,6 +223,7 @@ class TrainWidget(QWidget):
         self.optimizer_combo.setEnabled(enabled)
         self.lr_spin.setEnabled(enabled)
         self.patience_spin.setEnabled(enabled)
+        self.name_edit.setEnabled(enabled)
 
     def _validate_dataset(self) -> bool:
         data_path = self.data_edit.text().strip()

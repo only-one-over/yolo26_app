@@ -23,13 +23,15 @@
 |------|------|
 | **矩形框标注** | 拖拽绘制目标检测框，支持任意宽高比 |
 | **多边形标注** | 逐点绘制分割掩码，双击完成多边形 |
-| **SAM 交互式分割** | 点击目标区域自动生成分割掩码，支持多种 SAM 模型（ViT-H/L/B/T） |
+| **SAM 2 交互式分割** | 点击目标区域自动生成分割掩码，支持 SAM 2 模型（Hiera-T/S/B+/L） |
 | **YOLO 预标注** | 使用已训练的 YOLO 模型自动生成标注，支持类别映射对话框 |
 | **Grounding DINO** | 输入文本描述（如 "person, car"）进行零样本检测 |
 | **视频帧间追踪** | 标注首帧后自动追踪后续帧，支持 CSRT/KCF/MIL 追踪器 |
 | **批量检测** | 后台线程逐帧检测，进度对话框 + 取消支持 |
 | **撤销/重做** | Ctrl+Z 撤销，Ctrl+Shift+Z 重做，最多 50 步历史 |
 | **自动持久化** | 标注数据自动保存到项目目录 annotations.json，切换图片/重新打开自动恢复 |
+| **键盘快捷键切换图片** | ↑↓ 键快速切换上一张/下一张图片 |
+| **自定义实验名称** | 训练时可自定义实验名称，便于区分不同训练运行 |
 | **类别名称显示** | 标注标签显示类别名称（如 "person"）而非索引号 |
 | **增量绘制** | 添加/选择标注时 O(1) 更新，不全量重绘，大量标注不卡顿 |
 
@@ -125,6 +127,23 @@ output_dir/
 
 ## 🚀 快速开始
 
+## 📦 资源与下载
+
+### 必需依赖
+| 资源 | 链接 | 说明 |
+|------|------|------|
+| PyTorch | https://pytorch.org/get-started/locally/ | GPU 加速推理必需，需安装 CUDA 版本 |
+| CUDA Toolkit | https://developer.nvidia.com/cuda-toolkit-archive | GPU 支持，版本需与 PyTorch 匹配 |
+| Ultralytics | https://docs.ultralytics.com/ | YOLO 模型框架 |
+
+### 可选依赖
+| 资源 | 链接 | 说明 |
+|------|------|------|
+| SAM 2 | https://github.com/facebookresearch/sam2 | 交互式分割标注 |
+| SAM 2 模型权重 | https://github.com/facebookresearch/segment-anything-2#download-checkpoints | 推荐 sam2.1_hiera_small.pt (184MB) |
+| Grounding DINO | https://github.com/IDEA-Research/GroundingDINO | 文本驱动零样本检测 |
+| Grounding DINO 权重 | https://github.com/IDEA-Research/GroundingDINO#model-zoo | groundingdino_swint_ogc.pth |
+
 ### 环境要求
 
 - Python 3.9+
@@ -172,8 +191,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 # Intel RealSense 深度相机支持
 pip install pyrealsense2
 
-# SAM 分割支持
-pip install segment-anything
+# SAM 2 分割支持
+pip install sam2
 
 # Grounding DINO 支持
 pip install groundingdino
@@ -257,10 +276,10 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 3. 弹出类别映射对话框，将模型类别映射到项目类别
 4. 确认后自动生成标注
 
-**SAM 交互式分割：**
+**SAM 2 交互式分割：**
 1. 切换到 SAM 工具模式
 2. 点击目标区域，自动生成分割掩码
-3. 支持多种 SAM 模型：ViT-Huge / ViT-Large / ViT-Base / MobileSAM
+3. 支持 SAM 2 模型：sam2.1_hiera_tiny / sam2.1_hiera_small / sam2.1_hiera_base_plus / sam2.1_hiera_large
 
 **Grounding DINO 文本检测：**
 1. 点击"文本检测"按钮
@@ -526,7 +545,7 @@ names: ['person', 'car']
 
 | 问题 | 原因 | 解决方案 |
 |------|------|---------|
-| SAM 模型加载失败 | SAM 未安装或权重文件缺失 | 安装 `segment-anything`，下载 SAM 权重 |
+| SAM 2 模型加载失败 | SAM 2 未安装或权重文件缺失 | 安装 `sam2`，下载 SAM 2 权重（sam2.1_hiera_*.pt） |
 | 标注丢失 | 旧版本标注仅存在内存中 | 新版本自动持久化到 annotations.json |
 | 画面卡顿 | 大量标注时全量重绘 | 新版本使用增量绘制，仅更新变化的标注 |
 

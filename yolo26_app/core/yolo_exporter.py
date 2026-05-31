@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import cv2
+import numpy as np
 from PyQt6.QtCore import QRectF
 
 from yolo26_app.core.annotation_canvas import AnnotationItem
@@ -93,10 +94,17 @@ class YOLOExporter:
                         if ann.polygon.size() < 3:
                             continue
                         if task == "segment":
+                            pts = [(pt.x(), pt.y()) for pt in ann.polygon]
+                            pts_np = np.array(pts, dtype=np.float32)
+                            peri = cv2.arcLength(pts_np, True)
+                            epsilon = 0.005 * peri
+                            approx_np = cv2.approxPolyDP(pts_np, epsilon, True)
+                            if len(approx_np) < 3:
+                                approx_np = pts_np.reshape(-1, 1, 2)
                             coords: List[str] = [str(ann.class_index)]
-                            for pt in ann.polygon:
-                                coords.append(f"{max(0.0, min(1.0, pt.x() / img_w)):.6f}")
-                                coords.append(f"{max(0.0, min(1.0, pt.y() / img_h)):.6f}")
+                            for pt in approx_np.reshape(-1, 2):
+                                coords.append(f"{max(0.0, min(1.0, pt[0] / img_w)):.6f}")
+                                coords.append(f"{max(0.0, min(1.0, pt[1] / img_h)):.6f}")
                             lines.append(" ".join(coords))
                         else:
                             bbox = ann.polygon.boundingRect()
