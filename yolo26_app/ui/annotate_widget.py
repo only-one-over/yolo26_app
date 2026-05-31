@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -90,19 +91,71 @@ class _SamWorker(QThread):
         self._labels = labels
 
     def run(self):
+        use_autocast = False
+        try:
+            import torch
+            use_autocast = torch.cuda.is_available()
+        except ImportError:
+            pass
+
+        ctx = torch.autocast("cuda", dtype=torch.bfloat16) if use_autocast else nullcontext()
+
         try:
             if self._task == "encode":
-                self._predictor.set_image(self._image)
+                with ctx:
+                    self._predictor.set_image(self._image)
                 self.encoding_done.emit()
             elif self._task == "predict":
-                masks, scores, logits = self._predictor.predict(
-                    point_coords=self._points,
-                    point_labels=self._labels,
-                    multimask_output=True,
-                )
+                with ctx:
+                    masks, scores, logits = self._predictor.predict(
+                        point_coords=self._points,
+                        point_labels=self._labels,
+                        multimask_output=True,
+                    )
                 self.prediction_done.emit((masks, scores, logits))
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+
+class _ModelDownloadWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, url: str, save_path: str, parent=None):
+        super().__init__(parent)
+        self._url = url
+        self._save_path = save_path
+        self._stop_flag = False
+
+    def stop(self) -> None:
+        self._stop_flag = True
+
+    def run(self) -> None:
+        try:
+            import urllib.request
+            import tempfile
+            os.makedirs(os.path.dirname(self._save_path), exist_ok=True)
+            tmp_path = self._save_path + ".tmp"
+            urllib.request.urlretrieve(
+                self._url, tmp_path,
+                reporthook=self._download_hook
+            )
+            if not self._stop_flag:
+                os.rename(tmp_path, self._save_path)
+                self.finished.emit(self._save_path)
+            else:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def _download_hook(self, block_num: int, block_size: int, total_size: int) -> None:
+        if self._stop_flag:
+            raise Exception("Download cancelled")
+        if total_size > 0:
+            progress = int(block_num * block_size / total_size * 100)
+            self.progress.emit(min(progress, 100))
 
 
 class _BatchDetectWorker(QThread):
@@ -136,6 +189,28 @@ class _BatchDetectWorker(QThread):
         self._stop_flag = True
 
 
+class _ThumbnailWorker(QThread):
+    thumbnail_ready = pyqtSignal(int, QPixmap)
+
+    def __init__(self, items: list, parent=None):
+        super().__init__(parent)
+        self._items = items
+        self._stop_flag = False
+
+    def stop(self) -> None:
+        self._stop_flag = True
+        self.wait()
+
+    def run(self) -> None:
+        for row, path in self._items:
+            if self._stop_flag:
+                break
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.thumbnail_ready.emit(row, scaled)
+
+
 class AnnotateWidget(QWidget):
     export_requested = pyqtSignal()
 
@@ -154,6 +229,8 @@ class AnnotateWidget(QWidget):
         self._sam_worker = None
         self._batch_worker = None
         self._batch_progress = None
+        self._thumb_worker: Optional[_ThumbnailWorker] = None
+        self._download_worker = None
 
         self._setup_ui()
         self._connect_signals()
@@ -375,6 +452,7 @@ class AnnotateWidget(QWidget):
                 self._image_list.append(f)
                 self._annotations_dict.setdefault(f, [])
                 self._add_image_item(f)
+        self._start_thumbnail_loading()
 
     def _import_directory(self) -> None:
         dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
@@ -395,6 +473,7 @@ class AnnotateWidget(QWidget):
                 self._image_list.append(path)
                 self._annotations_dict.setdefault(path, [])
                 self._add_image_item(path)
+        self._start_thumbnail_loading()
         self._image_list_widget.setCurrentRow(0)
         self._on_image_selected(self._image_list_widget.currentItem(), None)
 
@@ -426,16 +505,31 @@ class AnnotateWidget(QWidget):
                 saved_idx += 1
             frame_idx += 1
         cap.release()
+        self._start_thumbnail_loading()
 
     def _add_image_item(self, image_path: str) -> None:
         item = QListWidgetItem(os.path.basename(image_path))
-        pixmap = QPixmap(image_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            item.setIcon(QIcon(scaled))
         item.setData(Qt.ItemDataRole.UserRole, image_path)
         item.setToolTip(image_path)
         self._image_list_widget.addItem(item)
+
+    def _start_thumbnail_loading(self) -> None:
+        items = []
+        for row in range(self._image_list_widget.count()):
+            item = self._image_list_widget.item(row)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            items.append((row, path))
+        if items:
+            if hasattr(self, '_thumb_worker') and self._thumb_worker is not None:
+                self._thumb_worker.stop()
+            self._thumb_worker = _ThumbnailWorker(items, self)
+            self._thumb_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+            self._thumb_worker.start()
+
+    def _on_thumbnail_ready(self, row: int, pixmap: QPixmap) -> None:
+        if 0 <= row < self._image_list_widget.count():
+            item = self._image_list_widget.item(row)
+            item.setIcon(QIcon(pixmap))
 
     def _on_image_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:
         if current is None:
@@ -591,6 +685,27 @@ class AnnotateWidget(QWidget):
                 model_path, model_type, config_path = model_info
             else:
                 start_dir = scan_dirs[0] if scan_dirs else ""
+                from yolo26_app.core.auto_annotator import SAM2_MODEL_URLS
+                model_names = list(SAM2_MODEL_URLS.keys())
+                choice, ok = QInputDialog.getItem(
+                    self, "SAM 2 模型",
+                    "未找到 SAM 2 模型文件。\n请选择要下载的模型或点击取消手动选择：",
+                    model_names, 0, False
+                )
+                if ok and choice:
+                    url = SAM2_MODEL_URLS[choice]
+                    save_dir = scan_dirs[0] if scan_dirs else os.getcwd()
+                    save_path = os.path.join(save_dir, f"{choice}.pt")
+                    progress_dlg = QProgressDialog(f"正在下载 {choice}...", "取消", 0, 100, self)
+                    progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+                    self._download_worker = _ModelDownloadWorker(url, save_path, self)
+                    self._download_worker.progress.connect(progress_dlg.setValue)
+                    self._download_worker.finished.connect(lambda p: (progress_dlg.close(), self._on_sam_model_downloaded(p, sam, device)))
+                    self._download_worker.error.connect(lambda e: (progress_dlg.close(), QMessageBox.warning(self, "下载失败", str(e))))
+                    progress_dlg.canceled.connect(self._download_worker.stop)
+                    self._download_worker.start()
+                    progress_dlg.exec()
+                    return
                 model_path, _ = QFileDialog.getOpenFileName(
                     self, "选择 SAM 2 模型权重", start_dir, "PyTorch Weights (*.pt *.pth)"
                 )
@@ -634,6 +749,31 @@ class AnnotateWidget(QWidget):
                 "按 Enter 键确认分割\n"
                 "按 Esc 键取消"
             )
+
+    def _on_sam_model_downloaded(self, model_path: str, sam: 'SAMAnnotator', device: str) -> None:
+        model_info = sam.scan_model_file(os.path.dirname(model_path))
+        if model_info:
+            _, _, config_path = model_info
+        else:
+            config_path = "configs/sam2.1/sam2.1_hiera_s.yaml"
+        window = self.window()
+        window.statusbar.showMessage("SAM 2 正在加载模型...")
+        if sam.load_model(model_path, config_path, device):
+            window.statusbar.showMessage("SAM 2 模型加载完成")
+            self._scene.set_sam_annotator(sam)
+            self._scene.current_tool = "sam"
+            self._sam_set_image_async(self._current_image_path)
+            QMessageBox.information(
+                self, "SAM 2 分割",
+                "已进入 SAM 2 分割模式\n\n"
+                "左键点击：添加前景点\n"
+                "右键点击：添加背景点\n"
+                "双击：确认分割结果\n"
+                "Esc：取消当前分割\n"
+                "↑↓键：切换图片"
+            )
+        else:
+            QMessageBox.warning(self, "错误", "SAM 2 模型加载失败")
 
     def _video_track(self) -> None:
         if len(self._image_list) < 2:
@@ -852,6 +992,7 @@ class AnnotateWidget(QWidget):
         self._image_list_widget.clear()
         for img_path in self._image_list:
             self._add_image_item(img_path)
+        self._start_thumbnail_loading()
 
     def _save_annotations_to_project(self) -> None:
         if self._current_image_path:
@@ -924,3 +1065,4 @@ class AnnotateWidget(QWidget):
         self._image_list_widget.clear()
         for img_path in self._image_list:
             self._add_image_item(img_path)
+        self._start_thumbnail_loading()

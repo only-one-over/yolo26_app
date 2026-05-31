@@ -43,7 +43,13 @@ class YOLOPreAnnotator:
                 return []
             h, w = image.shape[:2]
 
-            results = self._model.predict(source=image, conf=conf, verbose=False)
+            half = False
+            try:
+                import torch
+                half = torch.cuda.is_available()
+            except ImportError:
+                pass
+            results = self._model.predict(source=image, conf=conf, verbose=False, half=half)
             if not results or len(results) == 0:
                 return []
 
@@ -97,6 +103,16 @@ class YOLOPreAnnotator:
             return []
 
 
+SAM2_MODEL_URLS = {
+    "sam2.1_hiera_t": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt",
+    "sam2.1_hiera_s": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt",
+    "sam2.1_hiera_b+": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+    "sam2.1_hiera_l": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
+}
+
+GROUNDING_DINO_MODEL_URL = "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
+
+
 class SAMAnnotator:
     """使用 SAM 2 进行交互式分割标注"""
 
@@ -120,15 +136,27 @@ class SAMAnnotator:
         try:
             from sam2.build_sam import build_sam2
             from sam2.sam2_image_predictor import SAM2ImagePredictor
+            import sam2
+            self._sam2_package_dir = os.path.dirname(sam2.__file__)
             self._build_sam2 = build_sam2
             self._predictor_cls = SAM2ImagePredictor
             self._available = True
         except ImportError:
+            self._sam2_package_dir = None
             self._available = False
 
     @property
     def available(self) -> bool:
         return self._available
+
+    def resolve_config_path(self, config_path: str) -> str:
+        if os.path.isabs(config_path):
+            return config_path
+        if self._sam2_package_dir is not None:
+            abs_path = os.path.join(self._sam2_package_dir, config_path)
+            if os.path.isfile(abs_path):
+                return abs_path
+        return config_path
 
     @staticmethod
     def scan_model_file(directory: str) -> Optional[Tuple[str, str, str]]:
@@ -145,7 +173,8 @@ class SAMAnnotator:
             return False
         try:
             import torch
-            sam = self._build_sam2(config_path, model_path, device=device)
+            resolved_config = self.resolve_config_path(config_path)
+            sam = self._build_sam2(resolved_config, model_path, device=device)
             self._predictor = self._predictor_cls(sam)
             return True
         except Exception as e:

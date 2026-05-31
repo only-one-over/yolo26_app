@@ -26,7 +26,8 @@ class YOLOPredictor:
         image = cv2.imread(image_path)
         if image is None:
             return np.array([]), None
-        results = self.model.predict(source=image, conf=conf, verbose=False)
+        half = self._should_half()
+        results = self.model.predict(source=image, conf=conf, verbose=False, half=half)
         if results and len(results) > 0:
             annotated = self._draw_results(image, results[0])
             return annotated, results[0]
@@ -35,10 +36,10 @@ class YOLOPredictor:
     def predict_frame(self, frame_np: np.ndarray, conf: float = 0.25) -> Tuple[np.ndarray, object]:
         if self.model is None:
             return frame_np, None
-        results = self.model.predict(source=frame_np, conf=conf, verbose=False)
+        half = self._should_half()
+        results = self.model.predict(source=frame_np, conf=conf, verbose=False, half=half)
         if results and len(results) > 0:
-            annotated = self._draw_results(frame_np, results[0])
-            return annotated, results[0]
+            return frame_np, results[0]
         return frame_np, None
 
     def validate_model(self, data: str) -> dict:
@@ -77,6 +78,13 @@ class YOLOPredictor:
         except Exception:
             info["class_names"] = []
         return info
+
+    def _should_half(self) -> bool:
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            return False
 
     def _draw_results(self, image_np: np.ndarray, results: object) -> np.ndarray:
         try:
