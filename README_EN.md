@@ -105,9 +105,13 @@ output_dir/
 | **Multiple Sources** | Image / directory / video / USB camera / RealSense |
 | **Async Inference** | Background thread, auto frame-skip when inference can't keep up |
 | **Depth Display** | RealSense RGB + depth side-by-side |
-| **Validation** | Async mAP50/mAP50-95 metrics validation |
-| **Export** | ONNX / TorchScript / OpenVINO / TensorRT |
+| **Model Validation** | Background async mAP50/mAP50-95 validation (.pt models only, ONNX etc. will show unsupported message) |
+| **Model Export** | Background async export, supports ONNX / TorchScript / OpenVINO / TensorRT, ONNX auto graph optimization + post-export validation |
 | **Multi-format Loading** | .pt / .onnx / .torchscript / .xml |
+| **Async Image Inference** | Image inference runs in background thread, no UI freeze when loading ONNX models |
+| **ONNX Health Check** | Auto-verify ONNX output validity on load, auto-fallback to CPU if GPU fails |
+| **ONNX Export Optimization** | Auto-add simplify=True for ONNX export graph optimization |
+| **Post-Export Validation** | Auto-verify exported ONNX model can run inference correctly |
 
 **Export Format Comparison:**
 
@@ -543,6 +547,15 @@ names: ['person', 'car']
 | SAM 2 load failed | SAM 2 not installed or weights missing | Install `sam2`, download SAM 2 weights (sam2.1_hiera_*.pt) |
 | Annotations lost | Old version in-memory only | New version auto-persists to annotations.json |
 | Canvas lag | Full redraw on many annotations | New version uses incremental rendering |
+
+### ONNX Related
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| ONNX model returns no detections | onnxruntime-gpu version mismatch with CUDA | Install CPU version: `pip uninstall onnxruntime-gpu && pip install onnxruntime` |
+| ONNX model validation fails | ONNX format doesn't support validation (val), only .pt supported | Use .pt model for mAP validation |
+| App freezes after loading ONNX model | ONNX Runtime first inference initialization blocks main thread | Fixed in latest version: image inference now runs asynchronously |
+| Poor inference results after ONNX export | Missing graph optimization during export | Fixed in latest version: simplify=True auto-added |
 
 ---
 

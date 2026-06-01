@@ -63,6 +63,24 @@ class _ExportWorker(QThread):
             self.error_signal.emit(str(e))
 
 
+class _ImagePredictWorker(QThread):
+    done_signal = pyqtSignal(np.ndarray, object)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, predictor, image_path: str, conf: float) -> None:
+        super().__init__()
+        self.predictor = predictor
+        self.image_path = image_path
+        self.conf = conf
+
+    def run(self) -> None:
+        try:
+            annotated, results = self.predictor.predict_image(self.image_path, conf=self.conf)
+            self.done_signal.emit(annotated, results)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class _InferenceWorker(QThread):
     result_signal = pyqtSignal(np.ndarray, object)
 
@@ -144,6 +162,7 @@ class TestWidget(QWidget):
         self._inference_worker = _InferenceWorker(self.predictor)
         self._inference_worker.result_signal.connect(self._on_inference_result)
         self._last_frame: Optional[np.ndarray] = None
+        self._image_predict_worker: Optional[_ImagePredictWorker] = None
         self._init_ui()
 
     def __del__(self) -> None:
@@ -343,20 +362,7 @@ class TestWidget(QWidget):
         self._batch_index = 0
         self.prev_btn.setVisible(False)
         self.next_btn.setVisible(False)
-        conf = self.conf_spin.value()
-        annotated, results = self.predictor.predict_image(path, conf=conf)
-        if annotated is not None and annotated.size > 0:
-            self._display_np_image(annotated)
-            count = 0
-            if results is not None:
-                try:
-                    count = len(results.boxes)
-                except Exception:
-                    count = 0
-            self.det_count_label.setText(f"检测数量: {count}")
-            self.fps_label.setText("FPS: -")
-        else:
-            QMessageBox.warning(self, "警告", "图片读取或推理失败")
+        self._run_image_predict(path)
 
     def _select_image_directory(self) -> None:
         if self.predictor.model is None:
@@ -384,17 +390,7 @@ class TestWidget(QWidget):
         if not self._batch_images:
             return
         path = self._batch_images[self._batch_index]
-        annotated, results = self.predictor.predict_image(path, conf=self.conf_spin.value())
-        if annotated is not None and annotated.size > 0:
-            self._display_np_image(annotated)
-        det_count = 0
-        if results is not None:
-            try:
-                det_count = len(results.boxes)
-            except Exception:
-                det_count = 0
-        self.det_count_label.setText(f"检测数量: {det_count}")
-        self.fps_label.setText(f"图片: {self._batch_index + 1}/{len(self._batch_images)}")
+        self._run_image_predict(path)
 
     def _prev_batch_image(self) -> None:
         if self._batch_index > 0:
@@ -405,6 +401,48 @@ class TestWidget(QWidget):
         if self._batch_index < len(self._batch_images) - 1:
             self._batch_index += 1
             self._show_batch_image()
+
+    def _run_image_predict(self, path: str) -> None:
+        self.result_label.setText("推理中...")
+        self.image_btn.setEnabled(False)
+        self.prev_btn.setEnabled(False)
+        self.next_btn.setEnabled(False)
+        self._image_predict_worker = _ImagePredictWorker(
+            self.predictor, path, self.conf_spin.value()
+        )
+        self._image_predict_worker.done_signal.connect(self._on_image_predict_done)
+        self._image_predict_worker.error_signal.connect(self._on_image_predict_error)
+        self._image_predict_worker.start()
+
+    def _on_image_predict_done(self, annotated: np.ndarray, results: object) -> None:
+        self.image_btn.setEnabled(True)
+        self.prev_btn.setEnabled(True)
+        self.next_btn.setEnabled(True)
+        if annotated is not None and annotated.size > 0:
+            self._display_np_image(annotated)
+            count = 0
+            if results is not None:
+                try:
+                    count = len(results.boxes)
+                except Exception:
+                    count = 0
+            self.det_count_label.setText(f"检测数量: {count}")
+            if self._batch_images:
+                self.fps_label.setText(f"图片: {self._batch_index + 1}/{len(self._batch_images)}")
+            else:
+                self.fps_label.setText("FPS: -")
+            if self.predictor.is_onnx and count == 0:
+                diag = self.predictor.get_onnx_diag()
+                if diag:
+                    QMessageBox.warning(self, "ONNX 诊断", diag)
+        else:
+            QMessageBox.warning(self, "警告", "图片读取或推理失败")
+
+    def _on_image_predict_error(self, msg: str) -> None:
+        self.image_btn.setEnabled(True)
+        self.prev_btn.setEnabled(True)
+        self.next_btn.setEnabled(True)
+        QMessageBox.warning(self, "警告", f"图片推理出错:\n{msg}")
 
     def _on_select_video(self) -> None:
         if self.predictor.model is None:

@@ -105,9 +105,13 @@ output_dir/
 | **多种输入源** | 单张图片、图片目录、视频文件、USB 摄像头、Intel RealSense 深度相机 |
 | **异步推理** | 视频推理在后台线程执行，推理跟不上帧率时自动跳帧，避免延迟堆积 |
 | **深度图显示** | RealSense 相机支持彩色图 + 深度图并排显示 |
-| **模型验证** | 后台异步执行 mAP50/mAP50-95 指标验证 |
-| **模型导出** | 后台异步导出，支持 ONNX / TorchScript / OpenVINO / TensorRT |
+| **模型验证** | 后台异步执行 mAP50/mAP50-95 指标验证（仅支持 .pt 模型，ONNX 等格式会提示不支持） |
+| **模型导出** | 后台异步导出，支持 ONNX / TorchScript / OpenVINO / TensorRT，ONNX 自动图优化 + 导出后验证 |
 | **多格式加载** | 支持 .pt / .onnx / .torchscript / .xml 等格式模型 |
+| **异步图片推理** | 图片推理在后台线程执行，加载 ONNX 模型时不再卡死 UI |
+| **ONNX 健康检查** | 加载 ONNX 模型时自动验证输出有效性，GPU 异常自动回退 CPU |
+| **ONNX 导出优化** | 导出 ONNX 自动添加 simplify=True 图优化参数 |
+| **导出后验证** | 导出 ONNX 后自动验证模型可正常推理 |
 
 **导出格式对比：**
 
@@ -548,6 +552,15 @@ names: ['person', 'car']
 | SAM 2 模型加载失败 | SAM 2 未安装或权重文件缺失 | 安装 `sam2`，下载 SAM 2 权重（sam2.1_hiera_*.pt） |
 | 标注丢失 | 旧版本标注仅存在内存中 | 新版本自动持久化到 annotations.json |
 | 画面卡顿 | 大量标注时全量重绘 | 新版本使用增量绘制，仅更新变化的标注 |
+
+### ONNX 相关
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| ONNX 模型推理无检测框 | onnxruntime-gpu 与 CUDA 版本不匹配 | 安装 CPU 版: `pip uninstall onnxruntime-gpu && pip install onnxruntime` |
+| ONNX 模型验证失败 | ONNX 格式不支持验证（val），仅 .pt 支持 | 使用 .pt 模型进行 mAP 验证 |
+| 加载 ONNX 模型后程序卡死 | ONNX Runtime 首次推理初始化耗时阻塞主线程 | 新版本已修复：图片推理改为异步执行 |
+| 导出 ONNX 后推理效果差 | 导出时缺少图优化 | 新版本已修复：自动添加 simplify=True |
 
 ---
 
