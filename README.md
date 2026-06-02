@@ -182,13 +182,40 @@ git clone https://github.com/only-one-over/yolo26_app.git
 cd yolo26_app
 ```
 
-**2. 安装依赖**
+**2. 创建虚拟环境（推荐）**
+
+> 💡 **推荐**：使用虚拟环境隔离项目依赖，避免污染系统 Python 环境。
+
+**方式一：Python venv（标准 Python）**
+
+```bash
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+# Windows:
+venv\Scripts\activate
+# Linux / macOS:
+source venv/bin/activate
+```
+
+**方式二：Anaconda / Miniconda**
+
+```bash
+# 创建虚拟环境（推荐 Python 3.10）
+conda create -n yolo26 python=3.10 -y
+
+# 激活虚拟环境
+conda activate yolo26
+```
+
+**3. 安装依赖**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. 安装 PyTorch（GPU 支持）**
+**4. 安装 PyTorch（GPU 支持）**
 
 > ⚠️ **重要**：不要使用 `pip install torch` 默认安装，那会安装 CPU-only 版本，即使有 GPU 也无法使用！
 
@@ -209,7 +236,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
-**4. 安装可选依赖**
+**5. 安装可选依赖**
 
 ```bash
 # Intel RealSense 深度相机支持
@@ -222,7 +249,7 @@ pip install sam2
 pip install groundingdino
 ```
 
-**5. 启动应用**
+**6. 启动应用**
 
 ```bash
 python main.py
@@ -546,7 +573,7 @@ names: ['person', 'car']
 
 | 问题 | 原因 | 解决方案 |
 |------|------|---------|
-| 状态栏显示 🔴 CPU | PyTorch 未安装或安装了 CPU 版本 | 安装 CUDA 版 PyTorch（见[安装步骤](#3-安装-pytorchgpu-支持)） |
+| 状态栏显示 🔴 CPU | PyTorch 未安装或安装了 CPU 版本 | 安装 CUDA 版 PyTorch（见[安装步骤](#4-安装-pytorchgpu-支持)） |
 | 训练很慢 | 使用了 CPU 训练 | 确认 GPU 可用，检查 device 参数 |
 | CUDA out of memory | batch 太大或模型太大 | 减小 batch_size 或选择更小的模型 |
 | 状态栏显示 🔴 CPU (安全模式) | 上次应用未正常退出 | 正常关闭应用即可，安全模式会跳过 GPU 检测 |

@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QSpinBox,
+    QLineEdit,
 )
 
 from yolo26_app.core.annotation_canvas import AnnotationScene, AnnotationView, AnnotationItem
@@ -202,7 +203,8 @@ class _ThumbnailWorker(QThread):
 
     def stop(self) -> None:
         self._stop_flag = True
-        self.wait()
+        self.quit()
+        self.wait(3000)
 
     def run(self) -> None:
         for row, path in self._items:
@@ -275,6 +277,7 @@ class AnnotateWidget(QWidget):
         self._sam_worker.error_occurred.connect(self._on_sam_error)
         self._sam_worker.start()
         self._sam_worker.finished.connect(self._sam_worker.deleteLater)
+        self._sam_worker.finished.connect(lambda: setattr(self, '_sam_worker', None))
 
     def _sam_predict_async(self) -> None:
         if self._sam_annotator is None or self._sam_annotator._predictor is None:
@@ -303,6 +306,7 @@ class AnnotateWidget(QWidget):
         self._sam_worker.error_occurred.connect(self._on_sam_error)
         self._sam_worker.start()
         self._sam_worker.finished.connect(self._sam_worker.deleteLater)
+        self._sam_worker.finished.connect(lambda: setattr(self, '_sam_worker', None))
 
     def _on_sam_encode_done(self) -> None:
         self._sam_encoding = False
@@ -537,11 +541,15 @@ class AnnotateWidget(QWidget):
             items.append((row, path))
         if items:
             if hasattr(self, '_thumb_worker') and self._thumb_worker is not None:
-                self._thumb_worker.stop()
+                try:
+                    self._thumb_worker.stop()
+                except RuntimeError:
+                    pass
             self._thumb_worker = _ThumbnailWorker(items, self)
             self._thumb_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-            self._thumb_worker.start()
             self._thumb_worker.finished.connect(self._thumb_worker.deleteLater)
+            self._thumb_worker.finished.connect(lambda: setattr(self, '_thumb_worker', None))
+            self._thumb_worker.start()
 
     def _on_thumbnail_ready(self, row: int, pixmap: QPixmap) -> None:
         if 0 <= row < self._image_list_widget.count():
@@ -699,6 +707,7 @@ class AnnotateWidget(QWidget):
                     progress_dlg.canceled.connect(self._download_worker.stop)
                     self._download_worker.start()
                     self._download_worker.finished.connect(self._download_worker.deleteLater)
+                    self._download_worker.finished.connect(lambda: setattr(self, '_download_worker', None))
                     progress_dlg.exec()
                     return
                 model_path, _ = QFileDialog.getOpenFileName(
@@ -840,6 +849,7 @@ class AnnotateWidget(QWidget):
         progress.canceled.connect(self._batch_worker.stop)
         self._batch_worker.start()
         self._batch_worker.finished.connect(self._batch_worker.deleteLater)
+        self._batch_worker.finished.connect(lambda: setattr(self, '_batch_worker', None))
 
     def _on_batch_done(self, results_dict: dict, total: int) -> None:
         if self._batch_progress is not None:

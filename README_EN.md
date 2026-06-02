@@ -182,13 +182,40 @@ git clone https://github.com/only-one-over/yolo26_app.git
 cd yolo26_app
 ```
 
-**2. Install Dependencies**
+**2. Create Virtual Environment (Recommended)**
+
+> 💡 **Recommended**: Use a virtual environment to isolate project dependencies and avoid polluting your system Python.
+
+**Option A: Python venv (Standard Python)**
+
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# Linux / macOS:
+source venv/bin/activate
+```
+
+**Option B: Anaconda / Miniconda**
+
+```bash
+# Create virtual environment (Python 3.10 recommended)
+conda create -n yolo26 python=3.10 -y
+
+# Activate virtual environment
+conda activate yolo26
+```
+
+**3. Install Dependencies**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. Install PyTorch (GPU Support)**
+**4. Install PyTorch (GPU Support)**
 
 > ⚠️ **Important**: Do NOT use `pip install torch` — it installs the CPU-only version!
 
@@ -210,7 +237,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
-**4. Optional Dependencies**
+**5. Optional Dependencies**
 
 ```bash
 # Intel RealSense depth camera
@@ -223,7 +250,7 @@ pip install sam2
 pip install groundingdino
 ```
 
-**5. Launch App**
+**6. Launch App**
 
 ```bash
 python main.py
@@ -541,7 +568,7 @@ names: ['person', 'car']
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Status shows 🔴 CPU | CPU-only PyTorch installed | Install CUDA PyTorch (see [Installation](#3-install-pytorch-gpu-support)) |
+| Status shows 🔴 CPU | CPU-only PyTorch installed | Install CUDA PyTorch (see [Installation](#4-install-pytorch-gpu-support)) |
 | Slow training | Training on CPU | Verify GPU is available, check device parameter |
 | CUDA out of memory | Batch or model too large | Reduce batch_size or choose smaller model |
 | Status shows 🔴 CPU (Safe Mode) | App didn't exit normally last time | Close the app normally; safe mode skips GPU detection |

@@ -498,6 +498,7 @@ class TestWidget(QWidget):
         self._image_predict_worker.error_signal.connect(self._on_image_predict_error)
         self._image_predict_worker.start()
         self._image_predict_worker.finished.connect(self._image_predict_worker.deleteLater)
+        self._image_predict_worker.finished.connect(lambda: setattr(self, '_image_predict_worker', None))
 
     def _on_image_predict_done(self, annotated: np.ndarray, results: object) -> None:
         self.image_btn.setEnabled(True)
@@ -707,6 +708,7 @@ class TestWidget(QWidget):
         self._validate_worker.error_signal.connect(self._on_validate_error)
         self._validate_worker.start()
         self._validate_worker.finished.connect(self._validate_worker.deleteLater)
+        self._validate_worker.finished.connect(lambda: setattr(self, '_validate_worker', None))
 
     def _on_validate_done(self, metrics: dict) -> None:
         self.validate_btn.setEnabled(True)
@@ -769,6 +771,7 @@ class TestWidget(QWidget):
         self._export_worker.error_signal.connect(self._on_export_error)
         self._export_worker.start()
         self._export_worker.finished.connect(self._export_worker.deleteLater)
+        self._export_worker.finished.connect(lambda: setattr(self, '_export_worker', None))
 
     def _on_export_done(self, exported_path: str) -> None:
         self.confirm_export_btn.setEnabled(True)
