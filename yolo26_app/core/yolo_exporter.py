@@ -89,7 +89,18 @@ class YOLOExporter:
                         nh = max(0.0, min(1.0, nh))
                         if nw <= 0 or nh <= 0:
                             continue
-                        lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                        if task == "pose" and ann.keypoints:
+                            kpt_parts = []
+                            for kp in ann.keypoints:
+                                kx = kp.x() / img_w
+                                ky = kp.y() / img_h
+                                kpt_parts.extend([f"{kx:.6f}", f"{ky:.6f}", "2"])
+                            line = f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
+                            if kpt_parts:
+                                line += " " + " ".join(kpt_parts)
+                            lines.append(line)
+                        else:
+                            lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
                     elif ann.item_type == "polygon":
                         if ann.polygon.size() < 3:
                             continue
@@ -123,6 +134,28 @@ class YOLOExporter:
                             if nw <= 0 or nh <= 0:
                                 continue
                             lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                    elif ann.item_type == "keypoint":
+                        if task == "pose":
+                            if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0:
+                                cx = (ann.rect.x() + ann.rect.width() / 2) / img_w
+                                cy = (ann.rect.y() + ann.rect.height() / 2) / img_h
+                                nw = ann.rect.width() / img_w
+                                nh = ann.rect.height() / img_h
+                                cx = max(0.0, min(1.0, cx))
+                                cy = max(0.0, min(1.0, cy))
+                                nw = max(0.0, min(1.0, nw))
+                                nh = max(0.0, min(1.0, nh))
+                                if nw <= 0 or nh <= 0:
+                                    continue
+                                kpt_parts = []
+                                for kp in ann.keypoints:
+                                    kx = kp.x() / img_w
+                                    ky = kp.y() / img_h
+                                    kpt_parts.extend([f"{kx:.6f}", f"{ky:.6f}", "2"])
+                                line = f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
+                                if kpt_parts:
+                                    line += " " + " ".join(kpt_parts)
+                                lines.append(line)
 
                 if not lines:
                     skipped_count += 1
@@ -143,6 +176,20 @@ class YOLOExporter:
             "names": {i: c.name for i, c in enumerate(classes)},
         }
 
+        if task == "pose":
+            max_kpt = 0
+            for cls in classes:
+                if hasattr(cls, 'kpt_count') and cls.kpt_count > max_kpt:
+                    max_kpt = cls.kpt_count
+            if max_kpt == 0:
+                for anns in annotations_dict.values():
+                    for ann in anns:
+                        if ann.item_type == "keypoint" and len(ann.keypoints) > max_kpt:
+                            max_kpt = len(ann.keypoints)
+            if max_kpt > 0:
+                yaml_content["kpt_shape"] = [max_kpt, 3]
+                yaml_content["flip_idx"] = list(range(max_kpt))
+
         yaml_path = out / "data.yaml"
         lines: List[str] = []
         lines.append(f"path: {yaml_content['path']}")
@@ -151,6 +198,10 @@ class YOLOExporter:
         lines.append(f"nc: {yaml_content['nc']}")
         names_str = ", ".join(f"'{c.name}'" for c in classes)
         lines.append(f"names: [{names_str}]")
+        if "kpt_shape" in yaml_content:
+            lines.append(f"kpt_shape: {yaml_content['kpt_shape']}")
+        if "flip_idx" in yaml_content:
+            lines.append(f"flip_idx: {yaml_content['flip_idx']}")
         yaml_path.write_text("\n".join(lines), encoding="utf-8")
 
         return str(yaml_path), {"train_count": train_count, "val_count": val_count, "skipped_count": skipped_count}

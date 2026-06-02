@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from dataclasses import dataclass, field
 
@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QGraphicsPolygonItem,
     QGraphicsTextItem,
     QGraphicsEllipseItem,
+    QGraphicsLineItem,
     QGraphicsSceneMouseEvent,
     QGraphicsSceneWheelEvent,
 )
@@ -22,6 +23,7 @@ class AnnotationItem:
     rect: QRectF = field(default_factory=QRectF)
     polygon: QPolygonF = field(default_factory=QPolygonF)
     item_type: str = "rect"
+    keypoints: List[QPointF] = field(default_factory=list)
 
 
 class _SignalHolder(QObject):
@@ -51,6 +53,10 @@ class AnnotationScene(QGraphicsScene):
         self._sam_labels: list[int] = []
         self._temp_sam_items: list = []
         self._sam_encoding: bool = False
+        self._keypoint_points: list[QPointF] = []
+        self._temp_keypoint_items: list = []
+        self._temp_keypoint_lines: list = []
+        self._current_kpt_count: int = 0
         self._undo_stack: list = []
         self._redo_stack: list = []
 
@@ -82,12 +88,23 @@ class AnnotationScene(QGraphicsScene):
         self._cancel_drawing()
         if tool != "sam":
             self.clear_sam_points()
+        if tool != "keypoint":
+            for item in self._temp_keypoint_items:
+                self.removeItem(item)
+            self._temp_keypoint_items.clear()
+            for line in self._temp_keypoint_lines:
+                self.removeItem(line)
+            self._temp_keypoint_lines.clear()
+            self._keypoint_points.clear()
 
     def set_current_class(self, index: int) -> None:
         self._current_class_index = index
 
     def set_sam_annotator(self, annotator) -> None:
         self._sam_annotator = annotator
+
+    def set_kpt_count(self, count: int) -> None:
+        self._current_kpt_count = count
 
     def clear_sam_points(self) -> None:
         self._sam_points.clear()
@@ -105,6 +122,13 @@ class AnnotationScene(QGraphicsScene):
             self.removeItem(self._temp_polygon_item)
             self._temp_polygon_item = None
         self._polygon_points.clear()
+        for item in self._temp_keypoint_items:
+            self.removeItem(item)
+        self._temp_keypoint_items.clear()
+        for line in self._temp_keypoint_lines:
+            self.removeItem(line)
+        self._temp_keypoint_lines.clear()
+        self._keypoint_points.clear()
         if self._temp_sam_items:
             for item in self._temp_sam_items:
                 self.removeItem(item)
@@ -147,6 +171,15 @@ class AnnotationScene(QGraphicsScene):
                 self._sam_labels.append(0)
                 self._draw_sam_point(pos, False)
 
+        elif self._current_tool == "keypoint":
+            if event.button() == Qt.MouseButton.LeftButton:
+                if self._current_kpt_count > 0 and len(self._keypoint_points) >= self._current_kpt_count:
+                    return
+                self._keypoint_points.append(pos)
+                self._draw_temp_keypoint(pos, len(self._keypoint_points) - 1)
+                if self._current_kpt_count > 0 and len(self._keypoint_points) >= self._current_kpt_count:
+                    self._finish_keypoint()
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
@@ -178,6 +211,9 @@ class AnnotationScene(QGraphicsScene):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if self._current_tool == "keypoint" and len(self._keypoint_points) >= 1:
+            self._finish_keypoint()
+            return
         if self._current_tool == "polygon" and len(self._polygon_points) >= 3:
             polygon = QPolygonF(self._polygon_points)
             ann = AnnotationItem(
@@ -217,6 +253,58 @@ class AnnotationScene(QGraphicsScene):
         item.setPen(QPen(color, 1))
         self.addItem(item)
         self._temp_sam_items.append(item)
+
+    def _draw_temp_keypoint(self, pos: QPointF, index: int) -> None:
+        color = QColor(self._get_color(self._current_class_index))
+        radius = 5
+        ellipse = QGraphicsEllipseItem(pos.x() - radius, pos.y() - radius, radius * 2, radius * 2)
+        ellipse.setBrush(QBrush(color))
+        ellipse.setPen(QPen(color, 1))
+        self.addItem(ellipse)
+        self._temp_keypoint_items.append(ellipse)
+        text = QGraphicsTextItem(str(index + 1))
+        text.setDefaultTextColor(QColor(255, 255, 255))
+        font = text.font()
+        font.setPointSize(8)
+        font.setBold(True)
+        text.setFont(font)
+        text.setPos(pos.x() - 4, pos.y() - 10)
+        self.addItem(text)
+        self._temp_keypoint_items.append(text)
+        if index > 0:
+            prev = self._keypoint_points[index - 1]
+            line = self.addLine(prev.x(), prev.y(), pos.x(), pos.y(), QPen(color, 2))
+            self._temp_keypoint_lines.append(line)
+
+    def _finish_keypoint(self) -> None:
+        if not self._keypoint_points:
+            return
+        xs = [p.x() for p in self._keypoint_points]
+        ys = [p.y() for p in self._keypoint_points]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        margin = 5
+        rect = QRectF(min_x - margin, min_y - margin, max_x - min_x + margin * 2, max_y - min_y + margin * 2)
+        ann = AnnotationItem(
+            class_index=self._current_class_index,
+            rect=rect,
+            item_type="keypoint",
+            keypoints=list(self._keypoint_points),
+        )
+        for item in self._temp_keypoint_items:
+            self.removeItem(item)
+        for line in self._temp_keypoint_lines:
+            self.removeItem(line)
+        self._temp_keypoint_items.clear()
+        self._temp_keypoint_lines.clear()
+        self._keypoint_points.clear()
+        self._annotations.append(ann)
+        self._draw_annotation(ann, len(self._annotations) - 1)
+        self._undo_stack.append(("add", len(self._annotations) - 1, ann))
+        self._redo_stack.clear()
+        if len(self._undo_stack) > 50:
+            self._undo_stack.pop(0)
+        self.annotations_changed.emit()
 
     def get_sam_input_points(self):
         if not self._sam_points:
@@ -268,6 +356,9 @@ class AnnotationScene(QGraphicsScene):
             elif ann.item_type == "polygon" and ann.polygon.containsPoint(pos, Qt.FillRule.OddEvenFill):
                 self._selected_index = i
                 break
+            elif ann.item_type == "keypoint" and ann.rect.contains(pos):
+                self._selected_index = i
+                break
 
         if old_index == self._selected_index:
             return
@@ -313,6 +404,35 @@ class AnnotationScene(QGraphicsScene):
             item.setData(0, index)
             self.addItem(item)
             items_added.append(item)
+        elif ann.item_type == "keypoint":
+            item = QGraphicsRectItem(ann.rect)
+            item.setPen(pen)
+            item.setData(0, index)
+            self.addItem(item)
+            items_added.append(item)
+            for ki, kp in enumerate(ann.keypoints):
+                radius = 5
+                ellipse = QGraphicsEllipseItem(kp.x() - radius, kp.y() - radius, radius * 2, radius * 2)
+                ellipse.setBrush(QBrush(color))
+                ellipse.setPen(QPen(color, 1))
+                ellipse.setData(0, index)
+                self.addItem(ellipse)
+                items_added.append(ellipse)
+                text = QGraphicsTextItem(str(ki + 1))
+                text.setDefaultTextColor(QColor(255, 255, 255))
+                font = text.font()
+                font.setPointSize(8)
+                font.setBold(True)
+                text.setFont(font)
+                text.setPos(kp.x() - 4, kp.y() - 10)
+                text.setData(0, index)
+                self.addItem(text)
+                items_added.append(text)
+                if ki > 0:
+                    prev = ann.keypoints[ki - 1]
+                    line = self.addLine(prev.x(), prev.y(), kp.x(), kp.y(), QPen(color, 2))
+                    line.setData(0, index)
+                    items_added.append(line)
 
         name = self._class_names[ann.class_index] if 0 <= ann.class_index < len(self._class_names) else str(ann.class_index)
         label_text = name
@@ -337,7 +457,7 @@ class AnnotationScene(QGraphicsScene):
 
     def _redraw_all(self) -> None:
         for item in self.items():
-            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem)):
+            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem)):
                 self.removeItem(item)
         self._graphics_items.clear()
         for i, ann in enumerate(self._annotations):
@@ -399,7 +519,7 @@ class AnnotationScene(QGraphicsScene):
         self._redo_stack.clear()
         self._cancel_drawing()
         for item in self.items():
-            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem)):
+            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem)):
                 self.removeItem(item)
 
     def get_annotations(self) -> list[AnnotationItem]:
@@ -419,6 +539,9 @@ class AnnotationScene(QGraphicsScene):
                 self.undo()
         elif event.key() == Qt.Key.Key_Delete:
             self.delete_selected()
+        elif event.key() == Qt.Key.Key_Return and self._current_tool == "keypoint":
+            if len(self._keypoint_points) >= 1:
+                self._finish_keypoint()
         super().keyPressEvent(event)
 
 

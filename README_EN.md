@@ -23,10 +23,9 @@
 |---------|-------------|
 | **Bounding Box** | Drag to draw detection boxes with any aspect ratio |
 | **Polygon** | Click to add points, double-click to complete polygon |
+| **Keypoint Annotation** | Custom keypoint count per class, click to place numbered keypoints with auto-connecting lines, double-click/Enter to finish |
 | **SAM 2 Interactive Segmentation** | Click target area to auto-generate segmentation masks, supports SAM 2 models (Hiera-T/S/B+/L) |
-| **YOLO Pre-annotation** | Auto-annotate with trained model + class mapping dialog |
 | **Grounding DINO** | Zero-shot detection via text prompts (e.g. "person, car") |
-| **Video Tracking** | Auto-track annotations across video frames, supports CSRT/KCF/MIL |
 | **Batch Detection** | Background thread with progress dialog and cancel support |
 | **Undo/Redo** | Ctrl+Z undo, Ctrl+Shift+Z redo, up to 50 steps |
 | **Auto-persistence** | Annotations auto-saved to annotations.json, auto-restored on reopen |
@@ -48,6 +47,7 @@
 | **Train/Val Split** | Configurable ratio (default 80%), random split |
 | **Smart Conversion** | Polygons auto-convert to bounding boxes for detection tasks |
 | **Data Validation** | Filter invalid annotations, skip empty images, clean old files before export |
+| **Pose Export** | Export YOLO pose format dataset with keypoint coordinates and visibility, auto-generates kpt_shape and flip_idx in data.yaml |
 
 **Export Directory Structure:**
 ```
@@ -106,21 +106,41 @@ output_dir/
 | **Async Inference** | Background thread, auto frame-skip when inference can't keep up |
 | **Depth Display** | RealSense RGB + depth side-by-side |
 | **Model Validation** | Background async mAP50/mAP50-95 validation (.pt models only, ONNX etc. will show unsupported message) |
-| **Model Export** | Background async export, supports ONNX / TorchScript / OpenVINO / TensorRT, ONNX auto graph optimization + post-export validation |
+| **Model Export** | Background async export, supports 10 formats (ONNX/TorchScript/OpenVINO/TensorRT/CoreML/TFLite/NCNN/Paddle/MNN/RKNN), 8 configurable parameters with format-aware visibility, ONNX auto graph optimization + post-export validation |
 | **Multi-format Loading** | .pt / .onnx / .torchscript / .xml |
 | **Async Image Inference** | Image inference runs in background thread, no UI freeze when loading ONNX models |
 | **ONNX Health Check** | Auto-verify ONNX output validity on load, auto-fallback to CPU if GPU fails |
-| **ONNX Export Optimization** | Auto-add simplify=True for ONNX export graph optimization |
 | **Post-Export Validation** | Auto-verify exported ONNX model can run inference correctly |
 
 **Export Format Comparison:**
 
 | Format | Extension | Use Case |
 |--------|-----------|----------|
-| ONNX | `.onnx` | Cross-platform deployment |
+| ONNX | `.onnx` | Cross-platform deployment, supports FP16/INT8/dynamic |
 | TorchScript | `.torchscript` | Native PyTorch deployment |
 | OpenVINO | `.xml` | Intel CPU/GPU optimized inference |
 | TensorRT | `.engine` | NVIDIA GPU fast inference |
+| CoreML | `.mlpackage` | Apple device deployment |
+| TFLite | `.tflite` | Mobile/embedded deployment |
+| NCNN | `_ncnn_model/` | Mobile lightweight inference |
+| PaddlePaddle | `_paddle_model/` | Baidu PaddlePaddle ecosystem |
+| MNN | `.mnn` | Alibaba MNN inference engine |
+| RKNN | `_rknn_model/` | Rockchip NPU deployment |
+
+**Export Parameters:**
+
+| Parameter | Default | Formats | Description |
+|-----------|---------|---------|-------------|
+| imgsz | 640 | All | Input image size |
+| half | False | onnx, engine, openvino, torchscript, tflite, ncnn, mnn | FP16 half-precision |
+| int8 | False | onnx, engine, openvino, coreml, tflite, rknn | INT8 quantization |
+| dynamic | False | onnx, engine, openvino, torchscript, coreml | Dynamic input size |
+| batch | 1 | All | Batch inference size |
+| opset | 17 | onnx | ONNX opset version |
+| workspace | 4 GiB | engine | TensorRT workspace size |
+| simplify | True | onnx | ONNX graph simplification |
+
+> When switching export format, only parameters supported by that format are shown.
 
 ### 🎨 Themes
 
@@ -258,7 +278,7 @@ If output shows `CUDA available: True`, the app status bar will display 🟢 GPU
 
 #### Step 3: Add Classes
 
-Click "+" in the class panel to add annotation classes. Each class is auto-assigned a different color.
+Click "+" in the class panel to add annotation classes. Each class is auto-assigned a different color. Keypoint count can be set when adding a class (0 = no keypoints), displayed as "person (17pt)" in class list.
 
 #### Step 4: Draw Annotations
 
@@ -273,12 +293,6 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 
 #### Step 5: Assisted Annotation (Optional)
 
-**YOLO Pre-annotation:**
-1. Load a trained YOLO model in Test page
-2. Click "YOLO Pre-annotate" in Annotate page
-3. Class mapping dialog appears
-4. Annotations auto-generated after confirmation
-
 **SAM 2 Interactive Segmentation:**
 1. Switch to SAM tool mode
 2. Click target area to generate mask
@@ -288,11 +302,6 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 1. Click "Text Detection"
 2. Enter text prompt (e.g. "person, car, dog")
 3. Auto-detect and annotate
-
-**Video Tracking:**
-1. Annotate the first frame
-2. Click "Video Tracking"
-3. Auto-propagate to subsequent frames
 
 #### Step 6: Export Dataset
 
@@ -370,10 +379,12 @@ yolo26_app/
 │   │   ├── yolo_exporter.py         # Dataset export
 │   │   ├── trainer.py               # Trainer (QThread + callbacks)
 │   │   ├── predictor.py             # Predictor
-│   │   ├── auto_annotator.py        # Assisted annotation
+│   │   ├── auto_annotator.py        # Assisted annotation (SAM/DINO)
+│   │   ├── gpu_detector.py          # GPU detection (async/timeout/cache/safe mode)
+│   │   ├── task_manager.py          # Background task manager (async/timeout/callback)
 │   │   └── realsense_camera.py      # RealSense depth camera
 │   └── ui/                          # User interface
-│       ├── main_window.py           # Main window
+│       ├── main_window.py           # Main window (async GPU detection/safe mode/lazy load/navigation)
 │       ├── annotate_widget.py       # Annotation module
 │       ├── train_widget.py          # Training module
 │       ├── test_widget.py           # Testing module
@@ -392,6 +403,7 @@ yolo26_app/
 class ClassItem:
     name: str = ""           # Class name
     color: str = "#FF0000"   # Hex color
+    kpt_count: int = 0       # Keypoint count (0 = no keypoints)
 
 @dataclass
 class TrainConfig:
@@ -420,7 +432,8 @@ class AnnotationItem:
     class_index: int
     rect: QRectF = field(...)        # Bounding box
     polygon: QPolygonF = field(...)  # Polygon points
-    item_type: str = "rect"          # "rect" or "polygon"
+    item_type: str = "rect"          # "rect", "polygon", or "keypoint"
+    keypoints: List[QPointF] = field(default_factory=list)  # Keypoint list
 ```
 
 ### Signals & Data Flow
@@ -531,6 +544,9 @@ names: ['person', 'car']
 | Status shows 🔴 CPU | CPU-only PyTorch installed | Install CUDA PyTorch (see [Installation](#3-install-pytorch-gpu-support)) |
 | Slow training | Training on CPU | Verify GPU is available, check device parameter |
 | CUDA out of memory | Batch or model too large | Reduce batch_size or choose smaller model |
+| Status shows 🔴 CPU (Safe Mode) | App didn't exit normally last time | Close the app normally; safe mode skips GPU detection |
+| Status shows 🔴 CPU (Detection Timeout) | CUDA driver hang caused detection timeout | Check CUDA driver health, restart the app |
+| Startup shows "⏳ Detecting..." for a long time | GPU detection runs in background, first start is slower | Normal behavior; detection result is cached for 30 minutes |
 
 ### Training Issues
 

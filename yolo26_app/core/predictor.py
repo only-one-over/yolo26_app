@@ -72,13 +72,10 @@ class YOLOPredictor:
         except Exception:
             return {}
 
-    def export_model(self, format: str, output_dir: str) -> str:
+    def export_model(self, format: str, output_dir: str, **kwargs) -> str:
         if self.model is None:
             raise RuntimeError("模型未加载")
-        if format.lower() == "onnx":
-            exported_path = self.model.export(format=format, simplify=True)
-        else:
-            exported_path = self.model.export(format=format)
+        exported_path = self.model.export(format=format, **kwargs)
         exported_path = str(exported_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)

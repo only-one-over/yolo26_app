@@ -20,9 +20,9 @@ class LabelManager:
     def save_to_project(self, config: ProjectConfig) -> None:
         config.classes = list(self._classes)
 
-    def add_class(self, name: str) -> ClassItem:
+    def add_class(self, name: str, kpt_count: int = 0) -> ClassItem:
         color = COLOR_PALETTE[len(self._classes) % len(COLOR_PALETTE)]
-        item = ClassItem(name=name, color=color)
+        item = ClassItem(name=name, color=color, kpt_count=kpt_count)
         self._classes.append(item)
         return item
 

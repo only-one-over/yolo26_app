@@ -2,7 +2,7 @@ DARK_STYLE = """
 QWidget {
     background-color: #1e1e2e;
     color: #cdd6f4;
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-family: sans-serif;
     font-size: 13px;
 }
 
@@ -463,7 +463,7 @@ LIGHT_STYLE = """
 QWidget {
     background-color: #eff1f5;
     color: #4c4f69;
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-family: sans-serif;
     font-size: 13px;
 }
 
@@ -918,4 +918,101 @@ QPushButton#navButton:checked {
     color: #1e66f5;
     border-left: 3px solid #1e66f5;
 }
+"""
+
+TOOLBAR_BUTTON_STYLE = """
+    QPushButton {
+        padding: 4px 8px;
+        border: 1px solid #555;
+        border-radius: 4px;
+        background-color: #3c3c3c;
+        color: #ddd;
+    }
+    QPushButton:hover {
+        background-color: #505050;
+    }
+    QPushButton:checked {
+        background-color: #0078d4;
+        color: white;
+        border-color: #0078d4;
+    }
+    QPushButton:pressed {
+        background-color: #005a9e;
+    }
+"""
+
+START_BUTTON_STYLE = """
+    QPushButton {
+        padding: 6px 16px;
+        border: 1px solid #2d8659;
+        border-radius: 4px;
+        background-color: #2d8659;
+        color: white;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #3da06a;
+    }
+    QPushButton:pressed {
+        background-color: #1f6e45;
+    }
+    QPushButton:disabled {
+        background-color: #555;
+        color: #888;
+        border-color: #555;
+    }
+"""
+
+STOP_BUTTON_STYLE = """
+    QPushButton {
+        padding: 6px 16px;
+        border: 1px solid #c0392b;
+        border-radius: 4px;
+        background-color: #c0392b;
+        color: white;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #e74c3c;
+    }
+    QPushButton:pressed {
+        background-color: #a93226;
+    }
+    QPushButton:disabled {
+        background-color: #555;
+        color: #888;
+        border-color: #555;
+    }
+"""
+
+RESULT_LABEL_STYLE = """
+    QLabel {
+        background-color: #2b2b2b;
+        border: 1px solid #555;
+        border-radius: 4px;
+    }
+"""
+
+SCENE_BACKGROUND_STYLE = "background-color: #1e1e1e;"
+
+GROUP_BOX_STYLE = """
+    QGroupBox {
+        font-weight: bold;
+        border: 1px solid #555;
+        border-radius: 4px;
+        margin-top: 8px;
+        padding-top: 16px;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 5px;
+    }
+"""
+
+INFO_LABEL_STYLE = """
+    QLabel {
+        color: #a6adc8;
+        font-size: 11px;
+    }
 """

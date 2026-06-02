@@ -11,6 +11,7 @@ from typing import List, Union
 class ClassItem:
     name: str = ""
     color: str = "#FF0000"
+    kpt_count: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -20,6 +21,7 @@ class ClassItem:
         return cls(
             name=data.get("name", ""),
             color=data.get("color", "#FF0000"),
+            kpt_count=data.get("kpt_count", 0),
         )
 
 

@@ -27,6 +27,7 @@ from PyQt6.QtGui import QColor
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig
 from yolo26_app.core.trainer import YOLOTrainer
+from yolo26_app.ui import styles
 
 MODEL_INFO = {
     "n": "Nano | 3.2M 参数 | ≥2GB 显存 | 速度: ★★★★★",
@@ -62,7 +63,7 @@ class TrainWidget(QWidget):
         form.addRow("任务类型:", self.task_combo)
 
         self._task_info_label = QLabel(TASK_INFO.get("detect", ""))
-        self._task_info_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._task_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
         self._task_info_label.setWordWrap(True)
         form.addRow("", self._task_info_label)
 
@@ -71,7 +72,7 @@ class TrainWidget(QWidget):
         form.addRow("模型大小:", self.size_combo)
 
         self._model_info_label = QLabel(MODEL_INFO.get("n", ""))
-        self._model_info_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._model_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
         self._model_info_label.setWordWrap(True)
         form.addRow("", self._model_info_label)
 
@@ -79,7 +80,7 @@ class TrainWidget(QWidget):
         self.data_edit = QLineEdit()
         self.data_edit.setPlaceholderText("选择数据集 .yaml 文件")
         data_browse = QPushButton("浏览")
-        data_browse.setFixedWidth(60)
+        data_browse.setMinimumWidth(60)
         data_browse.clicked.connect(self._browse_dataset)
         data_row.addWidget(self.data_edit)
         data_row.addWidget(data_browse)
@@ -152,22 +153,12 @@ class TrainWidget(QWidget):
 
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("开始训练")
-        self.start_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; "
-            "font-weight: bold; padding: 8px 24px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-            "QPushButton:disabled { background-color: #a5d6a7; color: #e0e0e0; }"
-        )
+        self.start_btn.setStyleSheet(styles.START_BUTTON_STYLE)
         self.start_btn.clicked.connect(self._on_start)
 
         self.stop_btn = QPushButton("停止训练")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet(
-            "QPushButton { background-color: #f44336; color: white; "
-            "font-weight: bold; padding: 8px 24px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #d32f2f; }"
-            "QPushButton:disabled { background-color: #ef9a9a; color: #e0e0e0; }"
-        )
+        self.stop_btn.setStyleSheet(styles.STOP_BUTTON_STYLE)
         self.stop_btn.clicked.connect(self._on_stop)
 
         btn_layout.addWidget(self.start_btn)

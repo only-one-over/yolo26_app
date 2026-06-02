@@ -23,10 +23,9 @@
 |------|------|
 | **矩形框标注** | 拖拽绘制目标检测框，支持任意宽高比 |
 | **多边形标注** | 逐点绘制分割掩码，双击完成多边形 |
+| **关键点标注** | 支持自定义关键点数量，点击放置带编号关键点，自动连线，双击/Enter完成 |
 | **SAM 2 交互式分割** | 点击目标区域自动生成分割掩码，支持 SAM 2 模型（Hiera-T/S/B+/L） |
-| **YOLO 预标注** | 使用已训练的 YOLO 模型自动生成标注，支持类别映射对话框 |
 | **Grounding DINO** | 输入文本描述（如 "person, car"）进行零样本检测 |
-| **视频帧间追踪** | 标注首帧后自动追踪后续帧，支持 CSRT/KCF/MIL 追踪器 |
 | **批量检测** | 后台线程逐帧检测，进度对话框 + 取消支持 |
 | **撤销/重做** | Ctrl+Z 撤销，Ctrl+Shift+Z 重做，最多 50 步历史 |
 | **自动持久化** | 标注数据自动保存到项目目录 annotations.json，切换图片/重新打开自动恢复 |
@@ -47,6 +46,7 @@
 | **YOLO 格式导出** | 自动生成 images/ + labels/ + data.yaml 标准目录结构 |
 | **训练/验证集划分** | 可配置训练集比例（默认 80%），自动随机划分 |
 | **智能格式转换** | detect 任务下多边形自动转为外接矩形框，segment 任务保留原始多边形 |
+| **Pose 导出** | 导出 YOLO pose 格式数据集，标签包含关键点坐标和可见性，data.yaml 自动生成 kpt_shape 和 flip_idx |
 | **数据校验** | 过滤无效标注（零尺寸、点数不足），跳过无标注图片，导出前清空旧文件 |
 
 **导出目录结构：**
@@ -106,21 +106,41 @@ output_dir/
 | **异步推理** | 视频推理在后台线程执行，推理跟不上帧率时自动跳帧，避免延迟堆积 |
 | **深度图显示** | RealSense 相机支持彩色图 + 深度图并排显示 |
 | **模型验证** | 后台异步执行 mAP50/mAP50-95 指标验证（仅支持 .pt 模型，ONNX 等格式会提示不支持） |
-| **模型导出** | 后台异步导出，支持 ONNX / TorchScript / OpenVINO / TensorRT，ONNX 自动图优化 + 导出后验证 |
+| **模型导出** | 后台异步导出，支持 10 种格式（ONNX/TorchScript/OpenVINO/TensorRT/CoreML/TFLite/NCNN/Paddle/MNN/RKNN），8 个可配置参数，参数联动，ONNX 自动图优化 + 导出后验证 |
 | **多格式加载** | 支持 .pt / .onnx / .torchscript / .xml 等格式模型 |
 | **异步图片推理** | 图片推理在后台线程执行，加载 ONNX 模型时不再卡死 UI |
 | **ONNX 健康检查** | 加载 ONNX 模型时自动验证输出有效性，GPU 异常自动回退 CPU |
-| **ONNX 导出优化** | 导出 ONNX 自动添加 simplify=True 图优化参数 |
 | **导出后验证** | 导出 ONNX 后自动验证模型可正常推理 |
 
 **导出格式对比：**
 
 | 格式 | 扩展名 | 适用场景 |
 |------|--------|---------|
-| ONNX | `.onnx` | 通用跨平台部署 |
+| ONNX | `.onnx` | 通用跨平台部署，支持 FP16/INT8/动态尺寸 |
 | TorchScript | `.torchscript` | PyTorch 原生部署 |
 | OpenVINO | `.xml` | Intel CPU/GPU 优化推理 |
 | TensorRT | `.engine` | NVIDIA GPU 极速推理 |
+| CoreML | `.mlpackage` | Apple 设备部署 |
+| TFLite | `.tflite` | 移动端/嵌入式部署 |
+| NCNN | `_ncnn_model/` | 移动端轻量推理 |
+| PaddlePaddle | `_paddle_model/` | 百度飞桨生态 |
+| MNN | `.mnn` | 阿里 MNN 推理引擎 |
+| RKNN | `_rknn_model/` | 瑞芯微 NPU 部署 |
+
+**导出参数配置：**
+
+| 参数 | 默认值 | 适用格式 | 说明 |
+|------|--------|---------|------|
+| imgsz | 640 | 全部 | 输入图像尺寸 |
+| half | False | onnx, engine, openvino, torchscript, tflite, ncnn, mnn | FP16 半精度量化 |
+| int8 | False | onnx, engine, openvino, coreml, tflite, rknn | INT8 量化 |
+| dynamic | False | onnx, engine, openvino, torchscript, coreml | 动态输入尺寸 |
+| batch | 1 | 全部 | 批量推理大小 |
+| opset | 17 | onnx | ONNX opset 版本 |
+| workspace | 4 GiB | engine | TensorRT 工作空间大小 |
+| simplify | True | onnx | ONNX 图简化 |
+
+> 切换导出格式时，仅显示该格式支持的参数控件。
 
 ### 🎨 界面主题
 
@@ -257,7 +277,7 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 
 #### Step 3: 添加类别
 
-在左侧类别面板点击 "+" 添加标注类别，每个类别自动分配不同颜色。
+在左侧类别面板点击 "+" 添加标注类别，每个类别自动分配不同颜色。添加类别时可设置关键点数量（0表示无关键点），类别列表中显示如 "person (17pt)"。
 
 #### Step 4: 绘制标注
 
@@ -272,13 +292,7 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 
 #### Step 5: 辅助标注（可选）
 
-加速标注的四种方式：
-
-**YOLO 预标注：**
-1. 在测试页面加载一个已训练的 YOLO 模型
-2. 回到标注页面，点击"YOLO 预标注"
-3. 弹出类别映射对话框，将模型类别映射到项目类别
-4. 确认后自动生成标注
+加速标注的两种方式：
 
 **SAM 2 交互式分割：**
 1. 切换到 SAM 工具模式
@@ -289,11 +303,6 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 1. 点击"文本检测"按钮
 2. 输入文本描述（如 "person, car, dog"）
 3. 自动检测并生成标注
-
-**视频帧间追踪：**
-1. 标注视频的第一帧
-2. 点击"视频追踪"按钮
-3. 自动将标注传播到后续帧
 
 #### Step 6: 导出数据集
 
@@ -371,10 +380,12 @@ yolo26_app/
 │   │   ├── yolo_exporter.py         # YOLO 数据集导出（格式转换/校验/划分）
 │   │   ├── trainer.py               # YOLO 训练器 (QThread + 回调进度)
 │   │   ├── predictor.py             # YOLO 推理器（加载/推理/验证/导出）
-│   │   ├── auto_annotator.py        # 辅助标注 (YOLO预标注/SAM/DINO/视频追踪)
+│   │   ├── auto_annotator.py        # 辅助标注 (SAM/DINO)
+│   │   ├── gpu_detector.py          # GPU 检测 (异步/超时保护/缓存/安全模式)
+│   │   ├── task_manager.py          # 后台任务管理器 (异步/超时/回调)
 │   │   └── realsense_camera.py      # RealSense 深度相机（设备枚举/帧获取/深度着色）
 │   └── ui/                          # 用户界面
-│       ├── main_window.py           # 主窗口 (GPU状态/项目管理/页面导航)
+│       ├── main_window.py           # 主窗口 (异步GPU检测/安全模式/延迟加载/页面导航)
 │       ├── annotate_widget.py       # 标注模块 (持久化/批量检测/类别映射/辅助标注)
 │       ├── train_widget.py          # 训练模块 (参数配置/进度显示/日志)
 │       ├── test_widget.py           # 测试模块 (异步推理/验证/导出/帧跳过)
@@ -394,6 +405,7 @@ yolo26_app/
 class ClassItem:
     name: str = ""           # 类别名称
     color: str = "#FF0000"   # 十六进制颜色值
+    kpt_count: int = 0       # 关键点数量（0 表示无关键点）
 
 # 训练配置
 @dataclass
@@ -425,7 +437,8 @@ class AnnotationItem:
     class_index: int
     rect: QRectF = field(...)        # 矩形区域
     polygon: QPolygonF = field(...)  # 多边形点集
-    item_type: str = "rect"          # "rect" 或 "polygon"
+    item_type: str = "rect"          # "rect"、"polygon" 或 "keypoint"
+    keypoints: List[QPointF] = field(default_factory=list)  # 关键点列表
 ```
 
 ### 信号与数据流
@@ -536,6 +549,9 @@ names: ['person', 'car']
 | 状态栏显示 🔴 CPU | PyTorch 未安装或安装了 CPU 版本 | 安装 CUDA 版 PyTorch（见[安装步骤](#3-安装-pytorchgpu-支持)） |
 | 训练很慢 | 使用了 CPU 训练 | 确认 GPU 可用，检查 device 参数 |
 | CUDA out of memory | batch 太大或模型太大 | 减小 batch_size 或选择更小的模型 |
+| 状态栏显示 🔴 CPU (安全模式) | 上次应用未正常退出 | 正常关闭应用即可，安全模式会跳过 GPU 检测 |
+| 状态栏显示 🔴 CPU (检测超时) | CUDA 驱动挂死导致检测超时 | 检查 CUDA 驱动是否正常，重启应用 |
+| 启动时状态栏显示"⏳ 检测设备..."时间长 | GPU 检测在后台进行，首次启动较慢 | 正常现象，检测结果会缓存 30 分钟 |
 
 ### 训练相关
 

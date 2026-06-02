@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -26,6 +27,20 @@ from PyQt6.QtWidgets import (
 from yolo26_app.core.config import ProjectConfig
 from yolo26_app.core.predictor import YOLOPredictor
 from yolo26_app.core.realsense_camera import RealSenseCamera
+from yolo26_app.ui import styles
+
+FORMAT_PARAMS = {
+    "onnx": {"imgsz", "half", "int8", "dynamic", "batch", "opset", "simplify"},
+    "torchscript": {"imgsz", "half", "dynamic", "batch"},
+    "openvino": {"imgsz", "half", "int8", "dynamic", "batch"},
+    "engine": {"imgsz", "half", "int8", "dynamic", "batch", "workspace"},
+    "coreml": {"imgsz", "half", "int8", "dynamic", "batch"},
+    "tflite": {"imgsz", "half", "int8", "batch"},
+    "ncnn": {"imgsz", "half", "batch"},
+    "paddle": {"imgsz", "batch"},
+    "mnn": {"imgsz", "half", "int8", "batch"},
+    "rknn": {"imgsz", "int8", "batch"},
+}
 
 
 class _ValidateWorker(QThread):
@@ -49,15 +64,16 @@ class _ExportWorker(QThread):
     done_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, predictor: YOLOPredictor, format: str, output_dir: str) -> None:
+    def __init__(self, predictor: YOLOPredictor, format: str, output_dir: str, **kwargs) -> None:
         super().__init__()
         self.predictor = predictor
         self.format = format
         self.output_dir = output_dir
+        self.kwargs = kwargs
 
     def run(self) -> None:
         try:
-            exported_path = self.predictor.export_model(self.format, self.output_dir)
+            exported_path = self.predictor.export_model(self.format, self.output_dir, **self.kwargs)
             self.done_signal.emit(exported_path)
         except Exception as e:
             self.error_signal.emit(str(e))
@@ -251,7 +267,7 @@ class TestWidget(QWidget):
         self.result_label = QLabel("等待推理...")
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_label.setMinimumSize(640, 480)
-        self.result_label.setStyleSheet("QLabel { background-color: #1a1a2e; color: #aaa; }")
+        self.result_label.setStyleSheet(styles.RESULT_LABEL_STYLE)
         main_layout.addWidget(self.result_label, stretch=1)
 
         results_group = QGroupBox("结果与指标")
@@ -290,17 +306,85 @@ class TestWidget(QWidget):
         results_layout.addWidget(self.val_result_group)
 
         self.export_settings_group = QGroupBox("导出设置")
-        export_settings_layout = QVBoxLayout()
-        self.export_settings_group.setLayout(export_settings_layout)
-        format_layout = QHBoxLayout()
-        format_layout.addWidget(QLabel("格式:"))
+        export_layout = QVBoxLayout()
+        self.export_settings_group.setLayout(export_layout)
+
+        format_row = QHBoxLayout()
+        format_row.addWidget(QLabel("格式:"))
         self.export_format_combo = QComboBox()
-        self.export_format_combo.addItems(["onnx", "torchscript", "openvino", "engine"])
-        format_layout.addWidget(self.export_format_combo)
-        export_settings_layout.addLayout(format_layout)
+        self.export_format_combo.addItems(list(FORMAT_PARAMS.keys()))
+        self.export_format_combo.currentTextChanged.connect(self._update_export_params_visibility)
+        format_row.addWidget(self.export_format_combo)
+        export_layout.addLayout(format_row)
+
+        self._export_param_widgets = {}
+
+        imgsz_widget = QWidget()
+        imgsz_layout = QHBoxLayout(imgsz_widget)
+        imgsz_layout.setContentsMargins(0, 0, 0, 0)
+        imgsz_layout.addWidget(QLabel("图像尺寸:"))
+        self.export_imgsz_combo = QComboBox()
+        self.export_imgsz_combo.addItems(["320", "480", "640", "960", "1280"])
+        self.export_imgsz_combo.setCurrentText("640")
+        imgsz_layout.addWidget(self.export_imgsz_combo)
+        self._export_param_widgets["imgsz"] = imgsz_widget
+        export_layout.addWidget(imgsz_widget)
+
+        self.export_half_check = QCheckBox("FP16 半精度")
+        self._export_param_widgets["half"] = self.export_half_check
+        export_layout.addWidget(self.export_half_check)
+
+        self.export_int8_check = QCheckBox("INT8 量化")
+        self._export_param_widgets["int8"] = self.export_int8_check
+        export_layout.addWidget(self.export_int8_check)
+
+        self.export_dynamic_check = QCheckBox("动态输入尺寸")
+        self._export_param_widgets["dynamic"] = self.export_dynamic_check
+        export_layout.addWidget(self.export_dynamic_check)
+
+        batch_widget = QWidget()
+        batch_layout = QHBoxLayout(batch_widget)
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        batch_layout.addWidget(QLabel("批量大小:"))
+        self.export_batch_spin = QSpinBox()
+        self.export_batch_spin.setRange(1, 128)
+        self.export_batch_spin.setValue(1)
+        batch_layout.addWidget(self.export_batch_spin)
+        self._export_param_widgets["batch"] = batch_widget
+        export_layout.addWidget(batch_widget)
+
+        opset_widget = QWidget()
+        opset_layout = QHBoxLayout(opset_widget)
+        opset_layout.setContentsMargins(0, 0, 0, 0)
+        opset_layout.addWidget(QLabel("ONNX Opset:"))
+        self.export_opset_spin = QSpinBox()
+        self.export_opset_spin.setRange(9, 21)
+        self.export_opset_spin.setValue(17)
+        opset_layout.addWidget(self.export_opset_spin)
+        self._export_param_widgets["opset"] = opset_widget
+        export_layout.addWidget(opset_widget)
+
+        workspace_widget = QWidget()
+        workspace_layout = QHBoxLayout(workspace_widget)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.addWidget(QLabel("TRT 工作空间:"))
+        self.export_workspace_spin = QDoubleSpinBox()
+        self.export_workspace_spin.setRange(1.0, 32.0)
+        self.export_workspace_spin.setValue(4.0)
+        self.export_workspace_spin.setSuffix(" GiB")
+        workspace_layout.addWidget(self.export_workspace_spin)
+        self._export_param_widgets["workspace"] = workspace_widget
+        export_layout.addWidget(workspace_widget)
+
+        self.export_simplify_check = QCheckBox("图简化 (simplify)")
+        self.export_simplify_check.setChecked(True)
+        self._export_param_widgets["simplify"] = self.export_simplify_check
+        export_layout.addWidget(self.export_simplify_check)
+
         self.confirm_export_btn = QPushButton("确认导出")
         self.confirm_export_btn.clicked.connect(self._on_confirm_export)
-        export_settings_layout.addWidget(self.confirm_export_btn)
+        export_layout.addWidget(self.confirm_export_btn)
+
         self.export_settings_group.setVisible(False)
         results_layout.addWidget(self.export_settings_group)
 
@@ -321,18 +405,18 @@ class TestWidget(QWidget):
             self.model_path_edit.setText(path)
 
     def _on_load_model(self) -> None:
-        path = self.model_path_edit.text().strip()
-        if not path:
-            QMessageBox.warning(self, "警告", "请先选择模型文件路径")
+        model_path = self.model_path_edit.text().strip()
+        if not model_path:
+            QMessageBox.warning(self, "验证失败", "请先输入或选择模型路径")
             return
         self.load_model_btn.setEnabled(False)
         self.load_model_btn.setText("加载中...")
-        success = self.predictor.load_model(path)
+        success = self.predictor.load_model(model_path)
         if success:
             info = self.predictor.get_model_info()
             task = info.get("task", "unknown")
             names = info.get("class_names", [])
-            ext = Path(path).suffix.lower()
+            ext = Path(model_path).suffix.lower()
             format_names = {
                 ".pt": "PyTorch", ".onnx": "ONNX",
                 ".torchscript": "TorchScript", ".xml": "OpenVINO",
@@ -413,6 +497,7 @@ class TestWidget(QWidget):
         self._image_predict_worker.done_signal.connect(self._on_image_predict_done)
         self._image_predict_worker.error_signal.connect(self._on_image_predict_error)
         self._image_predict_worker.start()
+        self._image_predict_worker.finished.connect(self._image_predict_worker.deleteLater)
 
     def _on_image_predict_done(self, annotated: np.ndarray, results: object) -> None:
         self.image_btn.setEnabled(True)
@@ -621,6 +706,7 @@ class TestWidget(QWidget):
         self._validate_worker.done_signal.connect(self._on_validate_done)
         self._validate_worker.error_signal.connect(self._on_validate_error)
         self._validate_worker.start()
+        self._validate_worker.finished.connect(self._validate_worker.deleteLater)
 
     def _on_validate_done(self, metrics: dict) -> None:
         self.validate_btn.setEnabled(True)
@@ -642,6 +728,12 @@ class TestWidget(QWidget):
             QMessageBox.warning(self, "警告", "请先加载模型")
             return
         self.export_settings_group.setVisible(True)
+        self._update_export_params_visibility(self.export_format_combo.currentText())
+
+    def _update_export_params_visibility(self, fmt: str) -> None:
+        params = FORMAT_PARAMS.get(fmt, set())
+        for key, widget in self._export_param_widgets.items():
+            widget.setVisible(key in params)
 
     def _on_confirm_export(self) -> None:
         fmt = self.export_format_combo.currentText()
@@ -652,18 +744,47 @@ class TestWidget(QWidget):
             output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not output_dir:
             return
+        params = FORMAT_PARAMS.get(fmt, set())
+        kwargs = {}
+        if "imgsz" in params:
+            kwargs["imgsz"] = int(self.export_imgsz_combo.currentText())
+        if "half" in params and self.export_half_check.isChecked():
+            kwargs["half"] = True
+        if "int8" in params and self.export_int8_check.isChecked():
+            kwargs["int8"] = True
+        if "dynamic" in params and self.export_dynamic_check.isChecked():
+            kwargs["dynamic"] = True
+        if "batch" in params and self.export_batch_spin.value() > 1:
+            kwargs["batch"] = self.export_batch_spin.value()
+        if "opset" in params:
+            kwargs["opset"] = self.export_opset_spin.value()
+        if "workspace" in params:
+            kwargs["workspace"] = self.export_workspace_spin.value()
+        if "simplify" in params:
+            kwargs["simplify"] = self.export_simplify_check.isChecked()
         self.confirm_export_btn.setEnabled(False)
         self.confirm_export_btn.setText("导出中...")
-        self._export_worker = _ExportWorker(self.predictor, fmt, output_dir)
+        self._export_worker = _ExportWorker(self.predictor, fmt, output_dir, **kwargs)
         self._export_worker.done_signal.connect(self._on_export_done)
         self._export_worker.error_signal.connect(self._on_export_error)
         self._export_worker.start()
+        self._export_worker.finished.connect(self._export_worker.deleteLater)
 
     def _on_export_done(self, exported_path: str) -> None:
         self.confirm_export_btn.setEnabled(True)
         self.confirm_export_btn.setText("确认导出")
         if exported_path:
-            QMessageBox.information(self, "成功", f"模型已导出至:\n{exported_path}")
+            fmt = self.export_format_combo.currentText()
+            summary = f"格式: {fmt}"
+            if self.export_half_check.isChecked() and "half" in FORMAT_PARAMS.get(fmt, set()):
+                summary += "\nFP16: 是"
+            if self.export_int8_check.isChecked() and "int8" in FORMAT_PARAMS.get(fmt, set()):
+                summary += "\nINT8: 是"
+            if self.export_dynamic_check.isChecked() and "dynamic" in FORMAT_PARAMS.get(fmt, set()):
+                summary += "\n动态尺寸: 是"
+            if self.export_batch_spin.value() > 1 and "batch" in FORMAT_PARAMS.get(fmt, set()):
+                summary += f"\n批量: {self.export_batch_spin.value()}"
+            QMessageBox.information(self, "导出成功", f"模型已导出至:\n{exported_path}\n\n{summary}")
             self.export_settings_group.setVisible(False)
         else:
             QMessageBox.critical(self, "错误", "模型导出失败")

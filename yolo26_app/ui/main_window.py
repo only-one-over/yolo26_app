@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtGui import QAction, QCloseEvent
 
 from yolo26_app.core.config import ProjectConfig
@@ -31,6 +31,7 @@ from yolo26_app.ui.styles import DARK_STYLE
 from yolo26_app.ui.annotate_widget import AnnotateWidget
 from yolo26_app.ui.train_widget import TrainWidget
 from yolo26_app.ui.test_widget import TestWidget
+from yolo26_app.core.gpu_detector import GPUDetectWorker, load_exit_flag, save_exit_flag
 
 APP_STATE_DIR = Path.home() / ".yolo26_app"
 APP_STATE_FILE = APP_STATE_DIR / "app_state.json"
@@ -44,8 +45,8 @@ class NewProjectDialog(QDialog):
         self.setModal(True)
 
         layout = QFormLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("输入项目名称")
@@ -55,7 +56,7 @@ class NewProjectDialog(QDialog):
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择项目存储路径")
         self.browse_btn = QPushButton("浏览...")
-        self.browse_btn.setFixedWidth(80)
+        self.browse_btn.setMinimumWidth(80)
         self.browse_btn.clicked.connect(self._browse_path)
         path_row.addWidget(self.path_edit)
         path_row.addWidget(self.browse_btn)
@@ -81,6 +82,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.current_project_config: Optional[ProjectConfig] = None
+        self._gpu_detect_worker: Optional[GPUDetectWorker] = None
+
+        save_exit_flag(False)
 
         self.setWindowTitle("YOLO26 App")
         self.setMinimumSize(1024, 768)
@@ -90,21 +94,22 @@ class MainWindow(QMainWindow):
         self._init_menu()
         self._init_statusbar()
         self._apply_style()
-        self._restore_app_state()
+        QTimer.singleShot(0, self._restore_app_state)
+        QTimer.singleShot(0, self._detect_gpu_async)
 
     def _init_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(80)
+        sidebar.setMinimumWidth(80)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(4, 8, 4, 8)
-        sidebar_layout.setSpacing(4)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+        sidebar_layout.setSpacing(8)
 
         self.nav_buttons: List[QPushButton] = []
         nav_items: List[Tuple[str, str, int]] = [
@@ -126,30 +131,46 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(sidebar)
 
         self.annotate_widget = AnnotateWidget()
-        self.train_widget = TrainWidget()
-        self.test_widget = TestWidget()
-
-        self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
+        self.train_widget: Optional[TrainWidget] = None
+        self.test_widget: Optional[TestWidget] = None
+        self._widgets_created: dict = {0: True, 1: False, 2: False}
 
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.annotate_widget)
-        self.stacked.addWidget(self.train_widget)
-        self.stacked.addWidget(self.test_widget)
         main_layout.addWidget(self.stacked, 1)
 
         self.nav_buttons[0].setChecked(True)
 
     def _switch_page(self, index: int) -> None:
+        if not self._widgets_created.get(index):
+            self._ensure_widget(index)
         self.stacked.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+
+    def _ensure_widget(self, index: int) -> None:
+        if index == 1 and self.train_widget is None:
+            self.train_widget = TrainWidget()
+            self.stacked.addWidget(self.train_widget)
+            if self.current_project_config is not None:
+                self.train_widget.set_project_config(self.current_project_config)
+            self._widgets_created[1] = True
+        elif index == 2 and self.test_widget is None:
+            self.test_widget = TestWidget()
+            self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
+            self.stacked.addWidget(self.test_widget)
+            if self.current_project_config is not None:
+                self.test_widget.set_project_config(self.current_project_config)
+            self._widgets_created[2] = True
 
     def _set_project_config(self, config: ProjectConfig) -> None:
         self.current_project_config = config
         self.setWindowTitle(f"YOLO26 App - {config.project_name}")
         self.annotate_widget.set_project_config(config)
-        self.train_widget.set_project_config(config)
-        self.test_widget.set_project_config(config)
+        if self.train_widget is not None:
+            self.train_widget.set_project_config(config)
+        if self.test_widget is not None:
+            self.test_widget.set_project_config(config)
 
     def _init_menu(self) -> None:
         menubar = self.menuBar()
@@ -183,18 +204,27 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage("就绪")
         self._device_label = QLabel()
         self._device_label.setObjectName("deviceLabel")
+        self._device_label.setText("⏳ 检测设备...")
         self.statusbar.addPermanentWidget(self._device_label)
-        self._update_device_status()
 
-    def _update_device_status(self) -> None:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                name = torch.cuda.get_device_name(0)
-                self._device_label.setText(f"🟢 GPU: {name}")
-            else:
-                self._device_label.setText("🔴 CPU")
-        except ImportError:
+    def _detect_gpu_async(self) -> None:
+        exit_flag = load_exit_flag()
+        if exit_flag is False:
+            self._device_label.setText("🔴 CPU (安全模式)")
+            self.statusbar.showMessage("上次未正常退出，已启用安全模式", 5000)
+            return
+        self._gpu_detect_worker = GPUDetectWorker(self)
+        self._gpu_detect_worker.result_ready.connect(self._on_gpu_detected)
+        self._gpu_detect_worker.finished.connect(self._gpu_detect_worker.deleteLater)
+        self._gpu_detect_worker.start()
+
+    def _on_gpu_detected(self, status: str, device_name: str) -> None:
+        if status == "gpu":
+            self._device_label.setText(f"🟢 GPU: {device_name}")
+        elif status == "timeout":
+            self._device_label.setText("🔴 CPU (检测超时)")
+            self.statusbar.showMessage("GPU 检测超时，已降级为 CPU 模式", 5000)
+        else:
             self._device_label.setText("🔴 CPU")
 
     def _apply_style(self) -> None:
@@ -202,6 +232,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._save_app_state()
+        save_exit_flag(True)
         event.accept()
 
     def _save_app_state(self) -> None:
