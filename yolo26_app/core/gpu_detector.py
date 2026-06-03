@@ -99,15 +99,16 @@ def save_exit_flag(normal: bool) -> None:
 class GPUDetectWorker(QThread):
     result_ready = pyqtSignal(str, str)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, timeout: float = 5.0) -> None:
         super().__init__(parent)
+        self.timeout = timeout
 
     def run(self) -> None:
         cached = load_gpu_cache()
         if cached is not None:
             self.result_ready.emit(cached[0], cached[1])
             return
-        status, name = detect_gpu_subprocess(timeout=5.0)
+        status, name = detect_gpu_subprocess(timeout=self.timeout)
         if status == "gpu":
             save_gpu_cache("gpu", name)
         elif status == "cpu":

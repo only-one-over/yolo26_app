@@ -84,7 +84,6 @@ class MainWindow(QMainWindow):
         self.current_project_config: Optional[ProjectConfig] = None
         self._gpu_detect_worker: Optional[GPUDetectWorker] = None
 
-        save_exit_flag(False)
 
         self.setWindowTitle("YOLO26 App")
         self.setMinimumSize(1024, 768)
@@ -209,11 +208,11 @@ class MainWindow(QMainWindow):
 
     def _detect_gpu_async(self) -> None:
         exit_flag = load_exit_flag()
+        timeout = 3.0 if exit_flag is False else 5.0
         if exit_flag is False:
-            self._device_label.setText("🔴 CPU (安全模式)")
-            self.statusbar.showMessage("上次未正常退出，已启用安全模式", 5000)
-            return
-        self._gpu_detect_worker = GPUDetectWorker(self)
+            self._device_label.setText("⚠️ 上次未正常退出，缩短超时检测 GPU...")
+            self.statusbar.showMessage("上次未正常退出，GPU 检测使用缩短超时 (3s)", 5000)
+        self._gpu_detect_worker = GPUDetectWorker(self, timeout=timeout)
         self._gpu_detect_worker.result_ready.connect(self._on_gpu_detected)
         self._gpu_detect_worker.finished.connect(self._gpu_detect_worker.deleteLater)
         self._gpu_detect_worker.start()
