@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "yolo26-app"
 version = "1.0.0"
-description = "YOLO26 Desktop App - Annotation, Training, and Inference"
+description = "Ultralytics YOLO Desktop App - Annotation, Training, and Inference (YOLO26 / YOLOv8)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
-keywords = ["yolo", "yolo26", "object-detection", "pyqt6", "desktop-app"]
+keywords = ["yolo", "yolo26", "yolov8", "object-detection", "pyqt6", "desktop-app"]
 authors = [
     {name = "YOLO26 App Contributors"},
 ]

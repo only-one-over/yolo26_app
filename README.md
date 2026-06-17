@@ -2,11 +2,11 @@
 
 # 🎯 YOLO26 App
 
-**基于 Ultralytics YOLO26 的桌面端标注-训练-推理一体化应用**
+**基于 Ultralytics YOLO 的桌面端标注-训练-推理一体化应用（支持 YOLO26 / YOLOv8）**
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt6-6.0+-green.svg)](https://www.riverbankcomputing.com/software/pyqt/)
-[![Ultralytics](https://img.shields.io/badge/Ultralytics-YOLO26-orange.svg)](https://github.com/ultralytics/ultralytics)
+[![Ultralytics](https://img.shields.io/badge/Ultralytics-YOLO26%2Fv8-orange.svg)](https://github.com/ultralytics/ultralytics)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](README_EN.md) · [功能特性](#-功能特性) · [快速开始](#-快速开始) · [使用指南](#-使用指南) · [项目架构](#-项目架构) · [开发指南](#-开发指南)
@@ -29,6 +29,8 @@
 | **批量检测** | 后台线程逐帧检测，进度对话框 + 取消支持 |
 | **撤销/重做** | Ctrl+Z 撤销，Ctrl+Shift+Z 重做，最多 50 步历史 |
 | **自动持久化** | 标注数据自动保存到项目目录 annotations.json，切换图片/重新打开自动恢复 |
+| **关键点持久化** | 关键点标注保存/加载完整支持，项目文件包含 keypoints 字段 |
+| **类别持久化** | 添加/删除类别后自动保存到项目配置 |
 | **键盘快捷键切换图片** | ↑↓ 键快速切换上一张/下一张图片 |
 | **自定义实验名称** | 训练时可自定义实验名称，便于区分不同训练运行 |
 | **类别名称显示** | 标注标签显示类别名称（如 "person"）而非索引号 |
@@ -48,6 +50,9 @@
 | **智能格式转换** | detect 任务下多边形自动转为外接矩形框，segment 任务保留原始多边形 |
 | **Pose 导出** | 导出 YOLO pose 格式数据集，标签包含关键点坐标和可见性，data.yaml 自动生成 kpt_shape 和 flip_idx |
 | **数据校验** | 过滤无效标注（零尺寸、点数不足），跳过无标注图片，导出前清空旧文件 |
+| **导出安全保护** | 输出目录非空时自动创建带时间戳子目录，不删除已有文件 |
+| **按任务严格导出** | segment 只导出 polygon，detect 只导出 bbox，pose 只导出 bbox+关键点 |
+| **INT8 校验** | INT8 导出强制要求校准数据 data.yaml，未选则阻止导出 |
 
 **导出目录结构：**
 ```
@@ -75,6 +80,9 @@ output_dir/
 | **实时进度** | 通过 Ultralytics 回调机制实时更新 Epoch 进度条和日志 |
 | **早停机制** | 可配置 patience 参数，验证指标无提升时自动停止 |
 | **GPU 自动检测** | 状态栏实时显示 GPU/CPU 状态 |
+| **YOLOv8 支持** | 训练页支持 YOLO26 / YOLOv8 模型族切换，自定义模型路径 |
+| **数据增强配置** | 4 档预设（关闭/轻度/默认/强增强）+ 15 个可调增强参数 |
+| **训练配置持久化** | 训练参数自动保存到项目配置，重新打开恢复 |
 
 **模型大小参考：**
 
@@ -97,6 +105,8 @@ output_dir/
 | `optimizer` | auto | 优化器：auto/SGD/Adam/AdamW |
 | `lr0` | 0.01 | 初始学习率 |
 | `patience` | 100 | 早停耐心值（0 表示不早停） |
+| `model_family` | yolo26 | 模型族：yolo26 / yolov8 |
+| `augmentation_preset` | 默认 | 增强预设：关闭/轻度/默认/强增强/自定义 |
 
 ### 🔍 推理测试
 
@@ -439,6 +449,8 @@ class ClassItem:
 class TrainConfig:
     task: str = "detect"           # 任务类型
     model_size: str = "n"          # 模型大小
+    model_family: str = "yolo26"   # 模型族 (yolo26 / yolov8)
+    pretrained_model: str = ""     # 自定义模型路径
     data: str = ""                 # 数据集配置文件路径
     epochs: int = 100              # 训练轮数
     batch: int = 16                # 批大小
@@ -447,6 +459,11 @@ class TrainConfig:
     optimizer: str = "auto"        # 优化器
     lr0: float = 0.01              # 初始学习率
     patience: int = 100            # 早停耐心值
+    augmentation_enabled: bool = True   # 启用数据增强
+    augmentation_preset: str = "default" # 增强预设
+    mosaic: float = 1.0            # Mosaic 增强
+    mixup: float = 0.0             # MixUp 增强
+    # ... 更多增强参数
 
 # 项目配置
 @dataclass
@@ -576,8 +593,8 @@ names: ['person', 'car']
 | 状态栏显示 🔴 CPU | PyTorch 未安装或安装了 CPU 版本 | 安装 CUDA 版 PyTorch（见[安装步骤](#4-安装-pytorchgpu-支持)） |
 | 训练很慢 | 使用了 CPU 训练 | 确认 GPU 可用，检查 device 参数 |
 | CUDA out of memory | batch 太大或模型太大 | 减小 batch_size 或选择更小的模型 |
-| 状态栏显示 🔴 CPU (安全模式) | 上次应用未正常退出 | 正常关闭应用即可，安全模式会跳过 GPU 检测 |
-| 状态栏显示 🔴 CPU (检测超时) | CUDA 驱动挂死导致检测超时 | 检查 CUDA 驱动是否正常，重启应用 |
+| 状态栏显示 🔴 CPU (安全模式) | 上次应用未正常退出 | 正常关闭应用即可，安全模式使用缩短超时 (8s) 检测 GPU |
+| 状态栏显示 🔴 CPU (检测超时) | CUDA 驱动初始化耗时过长 | 检查 CUDA 驱动是否正常，重启应用；已增加超时至 10s |
 | 启动时状态栏显示"⏳ 检测设备..."时间长 | GPU 检测在后台进行，首次启动较慢 | 正常现象，检测结果会缓存 30 分钟 |
 
 ### 训练相关

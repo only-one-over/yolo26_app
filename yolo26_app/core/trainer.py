@@ -12,11 +12,27 @@ class YOLOTrainer(QThread):
     finished_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
 
-    TASK_MODEL_MAP = {
-        "detect": "yolo26{size}.pt",
-        "segment": "yolo26{size}-seg.pt",
-        "classify": "yolo26{size}-cls.pt",
-        "pose": "yolo26{size}-pose.pt",
+    MODEL_FAMILY_TASK_MODEL_MAP = {
+        "yolo26": {
+            "detect": "yolo26{size}.pt",
+            "segment": "yolo26{size}-seg.pt",
+            "classify": "yolo26{size}-cls.pt",
+            "pose": "yolo26{size}-pose.pt",
+        },
+        "yolov8": {
+            "detect": "yolov8{size}.pt",
+            "segment": "yolov8{size}-seg.pt",
+            "classify": "yolov8{size}-cls.pt",
+            "pose": "yolov8{size}-pose.pt",
+        },
+    }
+
+    AUGMENTATION_PRESET_LABELS = {
+        "off": "关闭",
+        "light": "轻度",
+        "default": "默认",
+        "strong": "强增强",
+        "custom": "自定义",
     }
 
     def __init__(self, config: TrainConfig, project_path: str) -> None:
@@ -33,14 +49,75 @@ class YOLOTrainer(QThread):
         total = getattr(trainer, "epochs", self.config.epochs)
         self.progress_signal.emit(epoch, total)
 
+    def _build_augmentation_kwargs(self) -> dict:
+        if self.config.augmentation_enabled:
+            return {
+                "hsv_h": self.config.hsv_h,
+                "hsv_s": self.config.hsv_s,
+                "hsv_v": self.config.hsv_v,
+                "degrees": self.config.degrees,
+                "translate": self.config.translate,
+                "scale": self.config.scale,
+                "shear": self.config.shear,
+                "perspective": self.config.perspective,
+                "flipud": self.config.flipud,
+                "fliplr": self.config.fliplr,
+                "mosaic": self.config.mosaic,
+                "mixup": self.config.mixup,
+                "cutmix": self.config.cutmix,
+                "copy_paste": self.config.copy_paste,
+                "erasing": self.config.erasing,
+                "auto_augment": self.config.auto_augment if self.config.auto_augment else None,
+            }
+
+        return {
+            "hsv_h": 0.0,
+            "hsv_s": 0.0,
+            "hsv_v": 0.0,
+            "degrees": 0.0,
+            "translate": 0.0,
+            "scale": 0.0,
+            "shear": 0.0,
+            "perspective": 0.0,
+            "flipud": 0.0,
+            "fliplr": 0.0,
+            "mosaic": 0.0,
+            "mixup": 0.0,
+            "cutmix": 0.0,
+            "copy_paste": 0.0,
+            "erasing": 0.0,
+            "auto_augment": None,
+        }
+
+    def _augmentation_log_summary(self, aug_kwargs: dict) -> str:
+        preset = self.AUGMENTATION_PRESET_LABELS.get(self.config.augmentation_preset, self.config.augmentation_preset)
+        enabled = "启用" if self.config.augmentation_enabled else "关闭"
+        status = f"数据增强: {enabled}, 预设={preset}"
+        values = (
+            f"mosaic={aug_kwargs['mosaic']}, mixup={aug_kwargs['mixup']}, "
+            f"cutmix={aug_kwargs['cutmix']}, copy_paste={aug_kwargs['copy_paste']}, "
+            f"hsv=({aug_kwargs['hsv_h']}, {aug_kwargs['hsv_s']}, {aug_kwargs['hsv_v']}), "
+            f"scale={aug_kwargs['scale']}, fliplr={aug_kwargs['fliplr']}, "
+            f"close_mosaic={self.config.close_mosaic}"
+        )
+        if not self.config.augmentation_enabled:
+            return f"{status}; 已显式关闭 Ultralytics 增强参数; {values}"
+        return f"{status}; {values}"
+
     def run(self) -> None:
         try:
             from ultralytics import YOLO
 
             task = self.config.task
             size = self.config.model_size
-            model_template = self.TASK_MODEL_MAP.get(task, "yolo26{size}.pt")
-            model_file = model_template.format(size=size)
+
+            if self.config.pretrained_model:
+                model_file = self.config.pretrained_model
+            else:
+                family = self.config.model_family or "yolo26"
+                family_map = self.MODEL_FAMILY_TASK_MODEL_MAP.get(family, self.MODEL_FAMILY_TASK_MODEL_MAP["yolo26"])
+                model_template = family_map.get(task, family_map["detect"])
+                model_file = model_template.format(size=size)
 
             self.log_signal.emit(f"加载模型: {model_file}")
             model = YOLO(model_file)
@@ -62,6 +139,9 @@ class YOLOTrainer(QThread):
                 f"batch={self.config.batch}, imgsz={self.config.imgsz}"
             )
 
+            aug_kwargs = self._build_augmentation_kwargs()
+            self.log_signal.emit(self._augmentation_log_summary(aug_kwargs))
+
             results = model.train(
                 data=self.config.data,
                 epochs=self.config.epochs,
@@ -73,6 +153,12 @@ class YOLOTrainer(QThread):
                 patience=self.config.patience,
                 project=project_dir,
                 name=name,
+                workers=self.config.workers,
+                cache=self.config.cache,
+                seed=self.config.seed,
+                plots=self.config.plots,
+                close_mosaic=self.config.close_mosaic,
+                **aug_kwargs,
             )
 
             logger.removeHandler(handler)

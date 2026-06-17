@@ -56,8 +56,10 @@ class YOLOPreAnnotator:
             annotations: List[AnnotationItem] = []
             result = results[0]
 
-            # 处理检测框
-            if result.boxes is not None:
+            has_masks = hasattr(result, "masks") and result.masks is not None
+
+            # 处理检测框（仅当无分割掩码时生成 rect，避免重复）
+            if not has_masks and result.boxes is not None:
                 for box in result.boxes:
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     cls_id = int(box.cls[0])
@@ -70,7 +72,7 @@ class YOLOPreAnnotator:
                     ))
 
             # 处理分割掩码
-            if hasattr(result, "masks") and result.masks is not None:
+            if has_masks:
                 masks = result.masks.data
                 if masks is not None and len(masks) > 0:
                     for i, mask in enumerate(masks):

@@ -21,13 +21,75 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QScrollArea,
+    QCheckBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
-from yolo26_app.core.config import TrainConfig, ProjectConfig
+from yolo26_app.core.config import TrainConfig, ProjectConfig, normalize_augmentation_preset
 from yolo26_app.core.trainer import YOLOTrainer
 from yolo26_app.ui import styles
+
+MODEL_FAMILY_MAP = {
+    "YOLO26": "yolo26",
+    "YOLOv8": "yolov8",
+}
+
+MODEL_FAMILY_TASK_MODEL_MAP = {
+    "yolo26": {
+        "detect": "yolo26{size}.pt",
+        "segment": "yolo26{size}-seg.pt",
+        "classify": "yolo26{size}-cls.pt",
+        "pose": "yolo26{size}-pose.pt",
+    },
+    "yolov8": {
+        "detect": "yolov8{size}.pt",
+        "segment": "yolov8{size}-seg.pt",
+        "classify": "yolov8{size}-cls.pt",
+        "pose": "yolov8{size}-pose.pt",
+    },
+}
+
+CUSTOM_AUGMENTATION_PRESET = "custom"
+AUGMENTATION_PRESET_ORDER = ["off", "light", "default", "strong"]
+AUGMENTATION_PRESET_LABELS = {
+    "off": "关闭",
+    "light": "轻度",
+    "default": "默认",
+    "strong": "强增强",
+    CUSTOM_AUGMENTATION_PRESET: "自定义",
+}
+
+AUGMENTATION_PRESETS = {
+    "off": {
+        "hsv_h": 0, "hsv_s": 0, "hsv_v": 0,
+        "degrees": 0, "translate": 0, "scale": 0, "shear": 0, "perspective": 0,
+        "flipud": 0, "fliplr": 0,
+        "mosaic": 0, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0,
+        "auto_augment": "",
+    },
+    "light": {
+        "hsv_h": 0.01, "hsv_s": 0.3, "hsv_v": 0.2,
+        "degrees": 5, "translate": 0.05, "scale": 0.3, "shear": 0, "perspective": 0,
+        "flipud": 0, "fliplr": 0.3,
+        "mosaic": 0.5, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0.2,
+        "auto_augment": "randaugment",
+    },
+    "default": {
+        "hsv_h": 0.015, "hsv_s": 0.7, "hsv_v": 0.4,
+        "degrees": 0, "translate": 0.1, "scale": 0.5, "shear": 0, "perspective": 0,
+        "flipud": 0, "fliplr": 0.5,
+        "mosaic": 1.0, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0.4,
+        "auto_augment": "randaugment",
+    },
+    "strong": {
+        "hsv_h": 0.02, "hsv_s": 0.8, "hsv_v": 0.6,
+        "degrees": 15, "translate": 0.2, "scale": 0.7, "shear": 10, "perspective": 0.001,
+        "flipud": 0.2, "fliplr": 0.5,
+        "mosaic": 1.0, "mixup": 0.2, "cutmix": 0.1, "copy_paste": 0.1, "erasing": 0.4,
+        "auto_augment": "randaugment",
+    },
+}
 
 MODEL_INFO = {
     "n": "Nano | 3.2M 参数 | ≥2GB 显存 | 速度: ★★★★★",
@@ -62,6 +124,10 @@ class TrainWidget(QWidget):
         self.task_combo.addItems(["detect", "segment", "classify", "pose"])
         form.addRow("任务类型:", self.task_combo)
 
+        self.family_combo = QComboBox()
+        self.family_combo.addItems(list(MODEL_FAMILY_MAP.keys()))
+        form.addRow("模型系列:", self.family_combo)
+
         self._task_info_label = QLabel(TASK_INFO.get("detect", ""))
         self._task_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
         self._task_info_label.setWordWrap(True)
@@ -70,6 +136,21 @@ class TrainWidget(QWidget):
         self.size_combo = QComboBox()
         self.size_combo.addItems(["n", "s", "m", "l", "x"])
         form.addRow("模型大小:", self.size_combo)
+
+        custom_model_row = QHBoxLayout()
+        self.custom_model_edit = QLineEdit()
+        self.custom_model_edit.setPlaceholderText("可选：自定义 .pt 或 .yaml 模型路径")
+        custom_model_browse = QPushButton("浏览")
+        custom_model_browse.setMinimumWidth(60)
+        custom_model_browse.clicked.connect(self._browse_custom_model)
+        custom_model_row.addWidget(self.custom_model_edit)
+        custom_model_row.addWidget(custom_model_browse)
+        form.addRow("自定义模型:", custom_model_row)
+
+        self._model_preview_label = QLabel()
+        self._model_preview_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._model_preview_label.setWordWrap(True)
+        form.addRow("", self._model_preview_label)
 
         self._model_info_label = QLabel(MODEL_INFO.get("n", ""))
         self._model_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
@@ -106,7 +187,7 @@ class TrainWidget(QWidget):
         form.addRow("设备:", self.device_edit)
 
         self.optimizer_combo = QComboBox()
-        self.optimizer_combo.addItems(["auto", "SGD", "Adam", "AdamW", "MuSGD"])
+        self.optimizer_combo.addItems(["auto", "SGD", "Adam", "AdamW"])
         form.addRow("优化器:", self.optimizer_combo)
 
         self.lr_spin = QDoubleSpinBox()
@@ -127,17 +208,168 @@ class TrainWidget(QWidget):
 
         config_group.setLayout(form)
 
+        # 高级设置组（可折叠）
+        self._advanced_group = QGroupBox("高级设置")
+        self._advanced_group.setCheckable(True)
+        self._advanced_group.setChecked(False)
+        advanced_form = QFormLayout()
+
+        self.workers_spin = QSpinBox()
+        self.workers_spin.setRange(0, 64)
+        self.workers_spin.setValue(8)
+        advanced_form.addRow("Workers:", self.workers_spin)
+
+        self.cache_check = QCheckBox()
+        self.cache_check.setChecked(False)
+        advanced_form.addRow("缓存数据:", self.cache_check)
+
+        self.seed_spin = QSpinBox()
+        self.seed_spin.setRange(0, 999999)
+        self.seed_spin.setValue(0)
+        advanced_form.addRow("随机种子:", self.seed_spin)
+
+        self.plots_check = QCheckBox()
+        self.plots_check.setChecked(True)
+        advanced_form.addRow("生成图表:", self.plots_check)
+
+        self.close_mosaic_spin = QSpinBox()
+        self.close_mosaic_spin.setRange(0, 100)
+        self.close_mosaic_spin.setValue(10)
+
+        # 数据增强分组
+        aug_container = QWidget()
+        aug_layout = QFormLayout(aug_container)
+        aug_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.aug_enabled_check = QCheckBox()
+        self.aug_enabled_check.setChecked(True)
+        aug_layout.addRow("启用数据增强:", self.aug_enabled_check)
+
+        self.aug_preset_combo = QComboBox()
+        for preset_key in AUGMENTATION_PRESET_ORDER:
+            self.aug_preset_combo.addItem(AUGMENTATION_PRESET_LABELS[preset_key], preset_key)
+        self.aug_preset_combo.addItem(AUGMENTATION_PRESET_LABELS[CUSTOM_AUGMENTATION_PRESET], CUSTOM_AUGMENTATION_PRESET)
+        self.aug_preset_combo.setCurrentIndex(self.aug_preset_combo.findData("default"))
+        aug_layout.addRow("增强预设:", self.aug_preset_combo)
+
+        self._augmentation_task_hint_label = QLabel()
+        self._augmentation_task_hint_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._augmentation_task_hint_label.setWordWrap(True)
+        aug_layout.addRow("", self._augmentation_task_hint_label)
+
+        # 高级增强参数（可折叠）
+        self._aug_advanced_widget = QWidget()
+        aug_advanced_layout = QVBoxLayout(self._aug_advanced_widget)
+        aug_advanced_layout.setContentsMargins(0, 0, 0, 0)
+
+        color_group = QGroupBox("颜色增强")
+        color_form = QFormLayout(color_group)
+
+        self.hsv_h_spin = QDoubleSpinBox(); self.hsv_h_spin.setRange(0, 1); self.hsv_h_spin.setDecimals(3); self.hsv_h_spin.setSingleStep(0.005); self.hsv_h_spin.setValue(0.015)
+        color_form.addRow("HSV 色调:", self.hsv_h_spin)
+
+        self.hsv_s_spin = QDoubleSpinBox(); self.hsv_s_spin.setRange(0, 1); self.hsv_s_spin.setDecimals(2); self.hsv_s_spin.setSingleStep(0.05); self.hsv_s_spin.setValue(0.7)
+        color_form.addRow("HSV 饱和度:", self.hsv_s_spin)
+
+        self.hsv_v_spin = QDoubleSpinBox(); self.hsv_v_spin.setRange(0, 1); self.hsv_v_spin.setDecimals(2); self.hsv_v_spin.setSingleStep(0.05); self.hsv_v_spin.setValue(0.4)
+        color_form.addRow("HSV 亮度:", self.hsv_v_spin)
+
+        geometry_group = QGroupBox("几何增强")
+        geometry_form = QFormLayout(geometry_group)
+
+        self.degrees_spin = QDoubleSpinBox(); self.degrees_spin.setRange(0, 180); self.degrees_spin.setDecimals(1); self.degrees_spin.setValue(0)
+        geometry_form.addRow("旋转角度:", self.degrees_spin)
+
+        self.translate_spin = QDoubleSpinBox(); self.translate_spin.setRange(0, 1); self.translate_spin.setDecimals(2); self.translate_spin.setSingleStep(0.05); self.translate_spin.setValue(0.1)
+        geometry_form.addRow("平移:", self.translate_spin)
+
+        self.scale_spin = QDoubleSpinBox(); self.scale_spin.setRange(0, 1); self.scale_spin.setDecimals(2); self.scale_spin.setSingleStep(0.05); self.scale_spin.setValue(0.5)
+        geometry_form.addRow("缩放:", self.scale_spin)
+
+        self.shear_spin = QDoubleSpinBox(); self.shear_spin.setRange(0, 180); self.shear_spin.setDecimals(1); self.shear_spin.setValue(0)
+        geometry_form.addRow("剪切:", self.shear_spin)
+
+        self.perspective_spin = QDoubleSpinBox(); self.perspective_spin.setRange(0, 0.01); self.perspective_spin.setDecimals(4); self.perspective_spin.setSingleStep(0.0005); self.perspective_spin.setValue(0)
+        geometry_form.addRow("透视:", self.perspective_spin)
+
+        self.flipud_spin = QDoubleSpinBox(); self.flipud_spin.setRange(0, 1); self.flipud_spin.setDecimals(2); self.flipud_spin.setSingleStep(0.05); self.flipud_spin.setValue(0)
+        geometry_form.addRow("上下翻转:", self.flipud_spin)
+
+        self.fliplr_spin = QDoubleSpinBox(); self.fliplr_spin.setRange(0, 1); self.fliplr_spin.setDecimals(2); self.fliplr_spin.setSingleStep(0.05); self.fliplr_spin.setValue(0.5)
+        geometry_form.addRow("左右翻转:", self.fliplr_spin)
+
+        composite_group = QGroupBox("组合增强")
+        composite_form = QFormLayout(composite_group)
+
+        self.mosaic_spin = QDoubleSpinBox(); self.mosaic_spin.setRange(0, 1); self.mosaic_spin.setDecimals(2); self.mosaic_spin.setSingleStep(0.1); self.mosaic_spin.setValue(1.0)
+        composite_form.addRow("Mosaic:", self.mosaic_spin)
+
+        self.mixup_spin = QDoubleSpinBox(); self.mixup_spin.setRange(0, 1); self.mixup_spin.setDecimals(2); self.mixup_spin.setSingleStep(0.05); self.mixup_spin.setValue(0)
+        composite_form.addRow("MixUp:", self.mixup_spin)
+
+        self.cutmix_spin = QDoubleSpinBox(); self.cutmix_spin.setRange(0, 1); self.cutmix_spin.setDecimals(2); self.cutmix_spin.setSingleStep(0.05); self.cutmix_spin.setValue(0)
+        composite_form.addRow("CutMix:", self.cutmix_spin)
+
+        self.copy_paste_spin = QDoubleSpinBox(); self.copy_paste_spin.setRange(0, 1); self.copy_paste_spin.setDecimals(2); self.copy_paste_spin.setSingleStep(0.05); self.copy_paste_spin.setValue(0)
+        composite_form.addRow("Copy-Paste:", self.copy_paste_spin)
+
+        composite_form.addRow("最后 N 轮关闭:", self.close_mosaic_spin)
+
+        expert_group = QGroupBox("高级增强")
+        expert_form = QFormLayout(expert_group)
+
+        self.erasing_spin = QDoubleSpinBox(); self.erasing_spin.setRange(0, 1); self.erasing_spin.setDecimals(2); self.erasing_spin.setSingleStep(0.05); self.erasing_spin.setValue(0.4)
+        expert_form.addRow("擦除:", self.erasing_spin)
+
+        self.auto_augment_combo = QComboBox()
+        self.auto_augment_combo.addItems(["randaugment", "autoaugment", ""])
+        expert_form.addRow("自动增强:", self.auto_augment_combo)
+
+        expert_hint = QLabel("提示：擦除和自动增强主要用于分类增强或新版 Ultralytics 支持场景。")
+        expert_hint.setStyleSheet(styles.INFO_LABEL_STYLE)
+        expert_hint.setWordWrap(True)
+        expert_form.addRow("", expert_hint)
+
+        aug_advanced_layout.addWidget(color_group)
+        aug_advanced_layout.addWidget(geometry_group)
+        aug_advanced_layout.addWidget(composite_group)
+        aug_advanced_layout.addWidget(expert_group)
+
+        aug_layout.addRow(self._aug_advanced_widget)
+        advanced_form.addRow("数据增强:", aug_container)
+
+        self._advanced_group.setLayout(advanced_form)
+
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.addWidget(config_group)
+        scroll_layout.addWidget(self._advanced_group)
         scroll_layout.addStretch()
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)
 
         self.size_combo.currentTextChanged.connect(self._update_model_info)
         self.task_combo.currentTextChanged.connect(self._update_task_info)
+        self.family_combo.currentTextChanged.connect(self._update_model_preview)
+        self.task_combo.currentTextChanged.connect(self._update_model_preview)
+        self.size_combo.currentTextChanged.connect(self._update_model_preview)
+        self.custom_model_edit.textChanged.connect(self._update_model_preview)
+
+        self.aug_enabled_check.toggled.connect(self._on_aug_enabled_changed)
+        self.aug_preset_combo.currentTextChanged.connect(self._on_aug_preset_changed)
+        # 增强参数变化时检测是否为自定义
+        for spin in [self.hsv_h_spin, self.hsv_s_spin, self.hsv_v_spin,
+                     self.degrees_spin, self.translate_spin, self.scale_spin,
+                     self.shear_spin, self.perspective_spin, self.flipud_spin,
+                     self.fliplr_spin, self.mosaic_spin, self.mixup_spin,
+                     self.cutmix_spin, self.copy_paste_spin, self.erasing_spin]:
+            spin.valueChanged.connect(self._on_aug_param_changed)
+        self.auto_augment_combo.currentTextChanged.connect(self._on_aug_param_changed)
+
+        self._update_model_preview()
+        self._update_task_info(self.task_combo.currentText())
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
@@ -178,8 +410,159 @@ class TrainWidget(QWidget):
     def _update_model_info(self, size: str) -> None:
         self._model_info_label.setText(MODEL_INFO.get(size, ""))
 
+    def _browse_custom_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择自定义模型", "", "模型文件 (*.pt *.yaml *.yml);;所有文件 (*)"
+        )
+        if path:
+            self.custom_model_edit.setText(path)
+
+    def _update_model_preview(self) -> None:
+        custom = self.custom_model_edit.text().strip()
+        if custom:
+            self._model_preview_label.setText(f"将加载模型：{custom}")
+            return
+        family_key = MODEL_FAMILY_MAP.get(self.family_combo.currentText(), "yolo26")
+        family_map = MODEL_FAMILY_TASK_MODEL_MAP.get(family_key, MODEL_FAMILY_TASK_MODEL_MAP["yolo26"])
+        task = self.task_combo.currentText()
+        size = self.size_combo.currentText()
+        template = family_map.get(task, family_map["detect"])
+        model_name = template.format(size=size)
+        self._model_preview_label.setText(f"将加载模型：{model_name}")
+
+    def _on_aug_enabled_changed(self, checked: bool) -> None:
+        """启用/禁用数据增强时切换控件可见性"""
+        self.aug_preset_combo.setVisible(checked)
+        self._augmentation_task_hint_label.setVisible(checked)
+        self._aug_advanced_widget.setVisible(checked)
+
+    def _augmentation_spin_widgets(self) -> List[QDoubleSpinBox]:
+        return [
+            self.hsv_h_spin,
+            self.hsv_s_spin,
+            self.hsv_v_spin,
+            self.degrees_spin,
+            self.translate_spin,
+            self.scale_spin,
+            self.shear_spin,
+            self.perspective_spin,
+            self.flipud_spin,
+            self.fliplr_spin,
+            self.mosaic_spin,
+            self.mixup_spin,
+            self.cutmix_spin,
+            self.copy_paste_spin,
+            self.erasing_spin,
+        ]
+
+    def _current_aug_preset_key(self) -> str:
+        data = self.aug_preset_combo.currentData()
+        return normalize_augmentation_preset(data or self.aug_preset_combo.currentText())
+
+    def _set_aug_preset_key(self, preset_key: str) -> None:
+        normalized = normalize_augmentation_preset(preset_key)
+        index = self.aug_preset_combo.findData(normalized)
+        if index < 0:
+            index = self.aug_preset_combo.findData("default")
+        self.aug_preset_combo.setCurrentIndex(index)
+
+    def _set_augmentation_values(self, preset: dict) -> None:
+        for spin in self._augmentation_spin_widgets():
+            spin.blockSignals(True)
+        self.auto_augment_combo.blockSignals(True)
+
+        self.hsv_h_spin.setValue(preset["hsv_h"])
+        self.hsv_s_spin.setValue(preset["hsv_s"])
+        self.hsv_v_spin.setValue(preset["hsv_v"])
+        self.degrees_spin.setValue(preset["degrees"])
+        self.translate_spin.setValue(preset["translate"])
+        self.scale_spin.setValue(preset["scale"])
+        self.shear_spin.setValue(preset["shear"])
+        self.perspective_spin.setValue(preset["perspective"])
+        self.flipud_spin.setValue(preset["flipud"])
+        self.fliplr_spin.setValue(preset["fliplr"])
+        self.mosaic_spin.setValue(preset["mosaic"])
+        self.mixup_spin.setValue(preset["mixup"])
+        self.cutmix_spin.setValue(preset["cutmix"])
+        self.copy_paste_spin.setValue(preset["copy_paste"])
+        self.erasing_spin.setValue(preset["erasing"])
+        self.auto_augment_combo.setCurrentText(preset["auto_augment"])
+
+        for spin in self._augmentation_spin_widgets():
+            spin.blockSignals(False)
+        self.auto_augment_combo.blockSignals(False)
+
+    def _current_augmentation_values(self) -> dict:
+        return {
+            "hsv_h": self.hsv_h_spin.value(),
+            "hsv_s": self.hsv_s_spin.value(),
+            "hsv_v": self.hsv_v_spin.value(),
+            "degrees": self.degrees_spin.value(),
+            "translate": self.translate_spin.value(),
+            "scale": self.scale_spin.value(),
+            "shear": self.shear_spin.value(),
+            "perspective": self.perspective_spin.value(),
+            "flipud": self.flipud_spin.value(),
+            "fliplr": self.fliplr_spin.value(),
+            "mosaic": self.mosaic_spin.value(),
+            "mixup": self.mixup_spin.value(),
+            "cutmix": self.cutmix_spin.value(),
+            "copy_paste": self.copy_paste_spin.value(),
+            "erasing": self.erasing_spin.value(),
+            "auto_augment": self.auto_augment_combo.currentText(),
+        }
+
+    def _on_aug_preset_changed(self, preset_name: str) -> None:
+        """切换增强预设时更新参数值"""
+        preset_key = self._current_aug_preset_key()
+        if preset_key == CUSTOM_AUGMENTATION_PRESET:
+            return
+        preset = AUGMENTATION_PRESETS.get(preset_key)
+        if preset is None:
+            return
+        self._set_augmentation_values(preset)
+        self._apply_task_augmentation_advice()
+
+    def _on_aug_param_changed(self) -> None:
+        """手动修改参数时将预设改为自定义"""
+        current = self._current_aug_preset_key()
+        if current == CUSTOM_AUGMENTATION_PRESET:
+            return
+        preset = AUGMENTATION_PRESETS.get(current)
+        if preset is None:
+            self._set_aug_preset_key(CUSTOM_AUGMENTATION_PRESET)
+            return
+        values = self._current_augmentation_values()
+        if any(values[key] != preset[key] for key in preset):
+            self._set_aug_preset_key(CUSTOM_AUGMENTATION_PRESET)
+
     def _update_task_info(self, task: str) -> None:
         self._task_info_label.setText(TASK_INFO.get(task, ""))
+        self._apply_task_augmentation_advice()
+
+    def _apply_task_augmentation_advice(self) -> None:
+        task = self.task_combo.currentText()
+        if task == "pose":
+            self._augmentation_task_hint_label.setText(
+                "姿态任务建议保持上下翻转 flipud=0，避免关键点左右/上下语义被破坏。"
+            )
+            if self.flipud_spin.value() != 0:
+                self.flipud_spin.blockSignals(True)
+                self.flipud_spin.setValue(0)
+                self.flipud_spin.blockSignals(False)
+                self._set_aug_preset_key(CUSTOM_AUGMENTATION_PRESET)
+        elif task == "segment":
+            self._augmentation_task_hint_label.setText(
+                "分割任务建议保守使用 Copy-Paste，默认保持 0.0；需要强增强时再手动提高。"
+            )
+        elif task == "classify":
+            self._augmentation_task_hint_label.setText(
+                "分类任务可重点关注 erasing 和 auto_augment；检测类组合增强仍由 Ultralytics 处理。"
+            )
+        else:
+            self._augmentation_task_hint_label.setText(
+                "检测任务可优先调整 Mosaic、MixUp、CutMix、HSV、缩放和左右翻转。"
+            )
 
     def _browse_dataset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -187,6 +570,22 @@ class TrainWidget(QWidget):
         )
         if path:
             self.data_edit.setText(path)
+
+    def _persist_train_config(self, config: TrainConfig) -> None:
+        """将训练配置保存到项目配置文件"""
+        window = self.window()
+        if not hasattr(window, "current_project_config"):
+            return
+        project_config = window.current_project_config
+        if project_config is None:
+            return
+        project_config.train_config = config
+        try:
+            from yolo26_app.core.project_manager import ProjectManager
+            config_path = Path(project_config.project_path) / ProjectManager.CONFIG_FILENAME
+            project_config.save(config_path)
+        except Exception:
+            pass
 
     def _build_config(self) -> TrainConfig:
         return TrainConfig(
@@ -201,6 +600,31 @@ class TrainWidget(QWidget):
             lr0=self.lr_spin.value(),
             patience=self.patience_spin.value(),
             name=self.name_edit.text().strip(),
+            workers=self.workers_spin.value(),
+            cache=self.cache_check.isChecked(),
+            seed=self.seed_spin.value(),
+            plots=self.plots_check.isChecked(),
+            close_mosaic=self.close_mosaic_spin.value(),
+            model_family=MODEL_FAMILY_MAP.get(self.family_combo.currentText(), "yolo26"),
+            pretrained_model=self.custom_model_edit.text().strip(),
+            augmentation_enabled=self.aug_enabled_check.isChecked(),
+            augmentation_preset=self._current_aug_preset_key(),
+            hsv_h=self.hsv_h_spin.value(),
+            hsv_s=self.hsv_s_spin.value(),
+            hsv_v=self.hsv_v_spin.value(),
+            degrees=self.degrees_spin.value(),
+            translate=self.translate_spin.value(),
+            scale=self.scale_spin.value(),
+            shear=self.shear_spin.value(),
+            perspective=self.perspective_spin.value(),
+            flipud=self.flipud_spin.value(),
+            fliplr=self.fliplr_spin.value(),
+            mosaic=self.mosaic_spin.value(),
+            mixup=self.mixup_spin.value(),
+            cutmix=self.cutmix_spin.value(),
+            copy_paste=self.copy_paste_spin.value(),
+            erasing=self.erasing_spin.value(),
+            auto_augment=self.auto_augment_combo.currentText(),
         )
 
     def _set_form_enabled(self, enabled: bool) -> None:
@@ -215,6 +639,31 @@ class TrainWidget(QWidget):
         self.lr_spin.setEnabled(enabled)
         self.patience_spin.setEnabled(enabled)
         self.name_edit.setEnabled(enabled)
+        self.workers_spin.setEnabled(enabled)
+        self.cache_check.setEnabled(enabled)
+        self.seed_spin.setEnabled(enabled)
+        self.plots_check.setEnabled(enabled)
+        self.close_mosaic_spin.setEnabled(enabled)
+        self.family_combo.setEnabled(enabled)
+        self.custom_model_edit.setEnabled(enabled)
+        self.aug_enabled_check.setEnabled(enabled)
+        self.aug_preset_combo.setEnabled(enabled)
+        self.hsv_h_spin.setEnabled(enabled)
+        self.hsv_s_spin.setEnabled(enabled)
+        self.hsv_v_spin.setEnabled(enabled)
+        self.degrees_spin.setEnabled(enabled)
+        self.translate_spin.setEnabled(enabled)
+        self.scale_spin.setEnabled(enabled)
+        self.shear_spin.setEnabled(enabled)
+        self.perspective_spin.setEnabled(enabled)
+        self.flipud_spin.setEnabled(enabled)
+        self.fliplr_spin.setEnabled(enabled)
+        self.mosaic_spin.setEnabled(enabled)
+        self.mixup_spin.setEnabled(enabled)
+        self.cutmix_spin.setEnabled(enabled)
+        self.copy_paste_spin.setEnabled(enabled)
+        self.erasing_spin.setEnabled(enabled)
+        self.auto_augment_combo.setEnabled(enabled)
 
     def _validate_dataset(self) -> bool:
         data_path = self.data_edit.text().strip()
@@ -227,17 +676,50 @@ class TrainWidget(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "验证失败", f"无法读取数据集配置: {e}")
             return False
-        base = Path(cfg.get("path", ""))
-        for key in ("train", "val"):
-            rel = cfg.get(key, "")
-            img_dir = base / rel if rel else base / "images" / key
-            if not img_dir.exists():
-                QMessageBox.warning(self, "验证失败", f"目录不存在: {img_dir}")
-                return False
-            images = glob.glob(str(img_dir / "*.jpg")) + glob.glob(str(img_dir / "*.png")) + glob.glob(str(img_dir / "*.bmp"))
-            if not images:
-                QMessageBox.warning(self, "验证失败", f"目录中没有图片: {img_dir}")
-                return False
+
+        data_yaml_path = Path(data_path).resolve()
+        raw_path = cfg.get("path", "")
+        if raw_path:
+            if Path(raw_path).is_absolute():
+                base = Path(raw_path).resolve()
+            else:
+                base = (data_yaml_path.parent / raw_path).resolve()
+        else:
+            base = data_yaml_path.parent
+
+        task = self.task_combo.currentText()
+        img_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+        if task in ("detect", "segment", "pose"):
+            for key in ("train", "val"):
+                img_dir = (base / cfg.get(key, f"images/{key}")).resolve()
+                lbl_dir = img_dir.parent.parent / "labels" / key
+                if not img_dir.exists():
+                    QMessageBox.warning(self, "验证失败", f"任务类型: {task}\n目录不存在: {img_dir}")
+                    return False
+                if not lbl_dir.exists():
+                    QMessageBox.warning(self, "验证失败", f"任务类型: {task}\n目录不存在: {lbl_dir}")
+                    return False
+                images = [
+                    p for p in glob.glob(str(img_dir / "**" / "*.*"), recursive=True)
+                    if Path(p).suffix.lower() in img_exts
+                ]
+                if not images:
+                    QMessageBox.warning(self, "验证失败", f"任务类型: {task}\n目录中没有图片: {img_dir}")
+                    return False
+        elif task == "classify":
+            for key in ("train", "val"):
+                split_dir = (base / cfg.get(key, key)).resolve()
+                if not split_dir.exists():
+                    QMessageBox.warning(self, "验证失败", f"任务类型: {task}\n目录不存在: {split_dir}")
+                    return False
+                images = [
+                    p for p in glob.glob(str(split_dir / "**" / "*.*"), recursive=True)
+                    if Path(p).suffix.lower() in img_exts
+                ]
+                if not images:
+                    QMessageBox.warning(self, "验证失败", f"任务类型: {task}\n目录中没有图片: {split_dir}")
+                    return False
         return True
 
     def _on_start(self) -> None:
@@ -250,6 +732,9 @@ class TrainWidget(QWidget):
 
         config = self._build_config()
         project_path = self._project_path or ""
+
+        # 训练前保存配置到项目
+        self._persist_train_config(config)
 
         self._trainer = YOLOTrainer(config, project_path)
         self._trainer.progress_signal.connect(self._on_progress)
@@ -331,6 +816,38 @@ class TrainWidget(QWidget):
         self.optimizer_combo.setCurrentText(tc.optimizer)
         self.lr_spin.setValue(tc.lr0)
         self.patience_spin.setValue(tc.patience)
+        self.workers_spin.setValue(tc.workers)
+        self.cache_check.setChecked(tc.cache)
+        self.seed_spin.setValue(tc.seed)
+        self.plots_check.setChecked(tc.plots)
+        self.close_mosaic_spin.setValue(tc.close_mosaic)
+
+        # 恢复模型系列
+        family_key = tc.model_family or "yolo26"
+        family_display = next((k for k, v in MODEL_FAMILY_MAP.items() if v == family_key), "YOLO26")
+        self.family_combo.setCurrentText(family_display)
+        self.custom_model_edit.setText(tc.pretrained_model or "")
+
+        # 恢复增强配置
+        self.aug_enabled_check.setChecked(tc.augmentation_enabled)
+        self._set_aug_preset_key(tc.augmentation_preset)
+        self.hsv_h_spin.setValue(tc.hsv_h)
+        self.hsv_s_spin.setValue(tc.hsv_s)
+        self.hsv_v_spin.setValue(tc.hsv_v)
+        self.degrees_spin.setValue(tc.degrees)
+        self.translate_spin.setValue(tc.translate)
+        self.scale_spin.setValue(tc.scale)
+        self.shear_spin.setValue(tc.shear)
+        self.perspective_spin.setValue(tc.perspective)
+        self.flipud_spin.setValue(tc.flipud)
+        self.fliplr_spin.setValue(tc.fliplr)
+        self.mosaic_spin.setValue(tc.mosaic)
+        self.mixup_spin.setValue(tc.mixup)
+        self.cutmix_spin.setValue(tc.cutmix)
+        self.copy_paste_spin.setValue(tc.copy_paste)
+        self.erasing_spin.setValue(tc.erasing)
+        self.auto_augment_combo.setCurrentText(tc.auto_augment or "randaugment")
+        self._apply_task_augmentation_advice()
 
         data_yaml = Path(config.project_path) / "datasets" / "data.yaml"
         if data_yaml.exists():

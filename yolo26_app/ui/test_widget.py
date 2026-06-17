@@ -15,11 +15,14 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -28,19 +31,7 @@ from yolo26_app.core.config import ProjectConfig
 from yolo26_app.core.predictor import YOLOPredictor
 from yolo26_app.core.realsense_camera import RealSenseCamera
 from yolo26_app.ui import styles
-
-FORMAT_PARAMS = {
-    "onnx": {"imgsz", "half", "int8", "dynamic", "batch", "opset", "simplify"},
-    "torchscript": {"imgsz", "half", "dynamic", "batch"},
-    "openvino": {"imgsz", "half", "int8", "dynamic", "batch"},
-    "engine": {"imgsz", "half", "int8", "dynamic", "batch", "workspace"},
-    "coreml": {"imgsz", "half", "int8", "dynamic", "batch"},
-    "tflite": {"imgsz", "half", "int8", "batch"},
-    "ncnn": {"imgsz", "half", "batch"},
-    "paddle": {"imgsz", "batch"},
-    "mnn": {"imgsz", "half", "int8", "batch"},
-    "rknn": {"imgsz", "int8", "batch"},
-}
+from yolo26_app.ui.export_dialog import ExportDialog
 
 
 class _ValidateWorker(QThread):
@@ -61,7 +52,7 @@ class _ValidateWorker(QThread):
 
 
 class _ExportWorker(QThread):
-    done_signal = pyqtSignal(str)
+    done_signal = pyqtSignal(str, bool, str)  # path, success, error_msg
     error_signal = pyqtSignal(str)
 
     def __init__(self, predictor: YOLOPredictor, format: str, output_dir: str, **kwargs) -> None:
@@ -73,8 +64,8 @@ class _ExportWorker(QThread):
 
     def run(self) -> None:
         try:
-            exported_path = self.predictor.export_model(self.format, self.output_dir, **self.kwargs)
-            self.done_signal.emit(exported_path)
+            exported_path, success, error_msg = self.predictor.export_model(self.format, self.output_dir, **self.kwargs)
+            self.done_signal.emit(exported_path, success, error_msg)
         except Exception as e:
             self.error_signal.emit(str(e))
 
@@ -83,15 +74,22 @@ class _ImagePredictWorker(QThread):
     done_signal = pyqtSignal(np.ndarray, object)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, predictor, image_path: str, conf: float) -> None:
+    def __init__(self, predictor, image_path: str, conf: float, iou: float, imgsz: int = 640, device: str = "", max_det: int = 300) -> None:
         super().__init__()
         self.predictor = predictor
         self.image_path = image_path
         self.conf = conf
+        self.iou = iou
+        self.imgsz = imgsz
+        self.device = device
+        self.max_det = max_det
 
     def run(self) -> None:
         try:
-            annotated, results = self.predictor.predict_image(self.image_path, conf=self.conf)
+            annotated, results = self.predictor.predict_image(
+                self.image_path, conf=self.conf, iou=self.iou,
+                imgsz=self.imgsz, device=self.device, max_det=self.max_det
+            )
             self.done_signal.emit(annotated, results)
         except Exception as e:
             self.error_signal.emit(str(e))
@@ -107,6 +105,10 @@ class _InferenceWorker(QThread):
         self._cond = QWaitCondition()
         self._frame: Optional[np.ndarray] = None
         self._conf: float = 0.25
+        self._iou: float = 0.7
+        self._imgsz: int = 640
+        self._device: str = ""
+        self._max_det: int = 300
         self._busy: bool = False
         self._stop_flag: bool = False
 
@@ -114,10 +116,14 @@ class _InferenceWorker(QThread):
     def is_busy(self) -> bool:
         return self._busy
 
-    def submit(self, frame: np.ndarray, conf: float) -> None:
+    def submit(self, frame: np.ndarray, conf: float, iou: float, imgsz: int = 640, device: str = "", max_det: int = 300) -> None:
         self._mutex.lock()
         self._frame = frame.copy()
         self._conf = conf
+        self._iou = iou
+        self._imgsz = imgsz
+        self._device = device
+        self._max_det = max_det
         self._busy = True
         self._cond.wakeOne()
         self._mutex.unlock()
@@ -144,11 +150,17 @@ class _InferenceWorker(QThread):
                 break
             frame = self._frame
             conf = self._conf
+            iou = self._iou
+            imgsz = self._imgsz
+            device = self._device
+            max_det = self._max_det
             self._frame = None
             self._mutex.unlock()
 
             try:
-                annotated, results = self._predictor.predict_frame(frame, conf=conf)
+                annotated, results = self._predictor.predict_frame(
+                    frame, conf=conf, iou=iou, imgsz=imgsz, device=device, max_det=max_det
+                )
             except Exception:
                 annotated = frame
                 results = None
@@ -190,6 +202,7 @@ class TestWidget(QWidget):
 
         model_group = QGroupBox("模型设置")
         model_form = QFormLayout()
+        model_form.setSpacing(4)
         model_group.setLayout(model_form)
 
         path_layout = QHBoxLayout()
@@ -215,11 +228,41 @@ class TestWidget(QWidget):
         self.iou_spin.setDecimals(2)
         model_form.addRow("IoU阈值:", self.iou_spin)
 
+        # 高级预测参数（可折叠）
+        self._advanced_widgets: list = []
+        self._advanced_toggle_btn = QPushButton("高级参数 ▼")
+        self._advanced_toggle_btn.setCheckable(True)
+        self._advanced_toggle_btn.setChecked(False)
+        self._advanced_toggle_btn.clicked.connect(self._toggle_advanced_params)
+        model_form.addRow(self._advanced_toggle_btn)
+
+        self.imgsz_spin = QSpinBox()
+        self.imgsz_spin.setRange(32, 2048)
+        self.imgsz_spin.setValue(640)
+        self.imgsz_spin.setSingleStep(32)
+        model_form.addRow("推理尺寸 (imgsz):", self.imgsz_spin)
+        self._advanced_widgets.append(self.imgsz_spin)
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("自动", "")
+        self.device_combo.addItem("CPU", "cpu")
+        self.device_combo.addItem("GPU (0)", "0")
+        model_form.addRow("设备 (device):", self.device_combo)
+        self._advanced_widgets.append(self.device_combo)
+
+        self.max_det_spin = QSpinBox()
+        self.max_det_spin.setRange(1, 1000)
+        self.max_det_spin.setValue(300)
+        model_form.addRow("最大检测数 (max_det):", self.max_det_spin)
+        self._advanced_widgets.append(self.max_det_spin)
+
+        # 初始隐藏高级参数控件
+        for w in self._advanced_widgets:
+            w.setVisible(False)
+
         self.load_model_btn = QPushButton("加载模型")
         self.load_model_btn.clicked.connect(self._on_load_model)
         model_form.addRow(self.load_model_btn)
-
-        main_layout.addWidget(model_group)
 
         input_group = QGroupBox("推理输入")
         input_layout = QHBoxLayout()
@@ -262,16 +305,14 @@ class TestWidget(QWidget):
         self.stop_btn.setEnabled(False)
         input_layout.addWidget(self.stop_btn)
 
-        main_layout.addWidget(input_group)
-
         self.result_label = QLabel("等待推理...")
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.result_label.setMinimumSize(640, 480)
         self.result_label.setStyleSheet(styles.RESULT_LABEL_STYLE)
-        main_layout.addWidget(self.result_label, stretch=1)
 
         results_group = QGroupBox("结果与指标")
         results_layout = QVBoxLayout()
+        results_layout.setSpacing(4)
         results_group.setLayout(results_layout)
 
         stats_layout = QHBoxLayout()
@@ -298,97 +339,65 @@ class TestWidget(QWidget):
         self.val_result_group = QGroupBox("验证结果")
         val_layout = QVBoxLayout()
         self.val_result_group.setLayout(val_layout)
+        # detect/segment/pose 通用标签
         self.val_map50_label = QLabel("mAP50: -")
         val_layout.addWidget(self.val_map50_label)
         self.val_map50_95_label = QLabel("mAP50-95: -")
         val_layout.addWidget(self.val_map50_95_label)
+        # segment 任务额外显示 box 指标
+        self.val_box_map50_label = QLabel("Box mAP50: -")
+        self.val_box_map50_label.setVisible(False)
+        val_layout.addWidget(self.val_box_map50_label)
+        self.val_box_map50_95_label = QLabel("Box mAP50-95: -")
+        self.val_box_map50_95_label.setVisible(False)
+        val_layout.addWidget(self.val_box_map50_95_label)
+        # classify 任务显示准确率
+        self.val_top1_label = QLabel("Top-1 Acc: -")
+        self.val_top1_label.setVisible(False)
+        val_layout.addWidget(self.val_top1_label)
+        self.val_top5_label = QLabel("Top-5 Acc: -")
+        self.val_top5_label.setVisible(False)
+        val_layout.addWidget(self.val_top5_label)
+        # 任务类型标签
+        self.val_task_label = QLabel("任务类型: -")
+        val_layout.addWidget(self.val_task_label)
         self.val_result_group.setVisible(False)
         results_layout.addWidget(self.val_result_group)
 
-        self.export_settings_group = QGroupBox("导出设置")
-        export_layout = QVBoxLayout()
-        self.export_settings_group.setLayout(export_layout)
+        # --- QSplitter + QScrollArea 布局 ---
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setSpacing(6)
+        scroll_layout.setContentsMargins(4, 4, 4, 4)
+        scroll_layout.addWidget(model_group)
+        scroll_layout.addWidget(input_group)
+        scroll_layout.addWidget(results_group)
+        scroll_layout.addStretch()
 
-        format_row = QHBoxLayout()
-        format_row.addWidget(QLabel("格式:"))
-        self.export_format_combo = QComboBox()
-        self.export_format_combo.addItems(list(FORMAT_PARAMS.keys()))
-        self.export_format_combo.currentTextChanged.connect(self._update_export_params_visibility)
-        format_row.addWidget(self.export_format_combo)
-        export_layout.addLayout(format_row)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(scroll_content)
 
-        self._export_param_widgets = {}
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(scroll_area)
+        splitter.addWidget(self.result_label)
+        splitter.setSizes([300, 450])
 
-        imgsz_widget = QWidget()
-        imgsz_layout = QHBoxLayout(imgsz_widget)
-        imgsz_layout.setContentsMargins(0, 0, 0, 0)
-        imgsz_layout.addWidget(QLabel("图像尺寸:"))
-        self.export_imgsz_combo = QComboBox()
-        self.export_imgsz_combo.addItems(["320", "480", "640", "960", "1280"])
-        self.export_imgsz_combo.setCurrentText("640")
-        imgsz_layout.addWidget(self.export_imgsz_combo)
-        self._export_param_widgets["imgsz"] = imgsz_widget
-        export_layout.addWidget(imgsz_widget)
+        main_layout.addWidget(splitter)
 
-        self.export_half_check = QCheckBox("FP16 半精度")
-        self._export_param_widgets["half"] = self.export_half_check
-        export_layout.addWidget(self.export_half_check)
+    def _toggle_advanced_params(self) -> None:
+        visible = self._advanced_toggle_btn.isChecked()
+        for w in self._advanced_widgets:
+            w.setVisible(visible)
+        self._advanced_toggle_btn.setText("高级参数 ▲" if visible else "高级参数 ▼")
 
-        self.export_int8_check = QCheckBox("INT8 量化")
-        self._export_param_widgets["int8"] = self.export_int8_check
-        export_layout.addWidget(self.export_int8_check)
-
-        self.export_dynamic_check = QCheckBox("动态输入尺寸")
-        self._export_param_widgets["dynamic"] = self.export_dynamic_check
-        export_layout.addWidget(self.export_dynamic_check)
-
-        batch_widget = QWidget()
-        batch_layout = QHBoxLayout(batch_widget)
-        batch_layout.setContentsMargins(0, 0, 0, 0)
-        batch_layout.addWidget(QLabel("批量大小:"))
-        self.export_batch_spin = QSpinBox()
-        self.export_batch_spin.setRange(1, 128)
-        self.export_batch_spin.setValue(1)
-        batch_layout.addWidget(self.export_batch_spin)
-        self._export_param_widgets["batch"] = batch_widget
-        export_layout.addWidget(batch_widget)
-
-        opset_widget = QWidget()
-        opset_layout = QHBoxLayout(opset_widget)
-        opset_layout.setContentsMargins(0, 0, 0, 0)
-        opset_layout.addWidget(QLabel("ONNX Opset:"))
-        self.export_opset_spin = QSpinBox()
-        self.export_opset_spin.setRange(9, 21)
-        self.export_opset_spin.setValue(17)
-        opset_layout.addWidget(self.export_opset_spin)
-        self._export_param_widgets["opset"] = opset_widget
-        export_layout.addWidget(opset_widget)
-
-        workspace_widget = QWidget()
-        workspace_layout = QHBoxLayout(workspace_widget)
-        workspace_layout.setContentsMargins(0, 0, 0, 0)
-        workspace_layout.addWidget(QLabel("TRT 工作空间:"))
-        self.export_workspace_spin = QDoubleSpinBox()
-        self.export_workspace_spin.setRange(1.0, 32.0)
-        self.export_workspace_spin.setValue(4.0)
-        self.export_workspace_spin.setSuffix(" GiB")
-        workspace_layout.addWidget(self.export_workspace_spin)
-        self._export_param_widgets["workspace"] = workspace_widget
-        export_layout.addWidget(workspace_widget)
-
-        self.export_simplify_check = QCheckBox("图简化 (simplify)")
-        self.export_simplify_check.setChecked(True)
-        self._export_param_widgets["simplify"] = self.export_simplify_check
-        export_layout.addWidget(self.export_simplify_check)
-
-        self.confirm_export_btn = QPushButton("确认导出")
-        self.confirm_export_btn.clicked.connect(self._on_confirm_export)
-        export_layout.addWidget(self.confirm_export_btn)
-
-        self.export_settings_group.setVisible(False)
-        results_layout.addWidget(self.export_settings_group)
-
-        main_layout.addWidget(results_group)
+    def _get_advanced_params(self) -> dict:
+        """获取高级预测参数"""
+        return {
+            "imgsz": self.imgsz_spin.value(),
+            "device": self.device_combo.currentData() or "",
+            "max_det": self.max_det_spin.value(),
+        }
 
     def set_project_config(self, config: ProjectConfig) -> None:
         self._project_config = config
@@ -411,7 +420,27 @@ class TestWidget(QWidget):
             return
         self.load_model_btn.setEnabled(False)
         self.load_model_btn.setText("加载中...")
-        success = self.predictor.load_model(model_path)
+        # For ONNX files, try to infer or ask for task type
+        task = ""
+        if model_path.lower().endswith(".onnx"):
+            task = self.predictor._guess_onnx_task(model_path)
+            if not task:
+                items = ["detect", "segment", "pose", "obb", "classify"]
+                item, ok = QInputDialog.getItem(
+                    self, "选择任务类型",
+                    "无法自动推断 ONNX 模型的任务类型，请选择：\n\n"
+                    "• detect — 目标检测\n"
+                    "• segment — 实例分割\n"
+                    "• pose — 关键点检测\n"
+                    "• obb — 旋转框检测\n"
+                    "• classify — 图像分类",
+                    items, 0, False,
+                )
+                if ok:
+                    task = item
+                else:
+                    task = "detect"
+        success = self.predictor.load_model(model_path, task=task)
         if success:
             info = self.predictor.get_model_info()
             task = info.get("task", "unknown")
@@ -491,8 +520,10 @@ class TestWidget(QWidget):
         self.image_btn.setEnabled(False)
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
+        adv_params = self._get_advanced_params()
         self._image_predict_worker = _ImagePredictWorker(
-            self.predictor, path, self.conf_spin.value()
+            self.predictor, path, self.conf_spin.value(), self.iou_spin.value(),
+            imgsz=adv_params["imgsz"], device=adv_params["device"], max_det=adv_params["max_det"]
         )
         self._image_predict_worker.done_signal.connect(self._on_image_predict_done)
         self._image_predict_worker.error_signal.connect(self._on_image_predict_error)
@@ -662,12 +693,20 @@ class TestWidget(QWidget):
                 self._display_np_image(colorized)
             else:
                 if not self._inference_worker.is_busy:
-                    self._inference_worker.submit(frame, self.conf_spin.value())
+                    adv_params = self._get_advanced_params()
+                    self._inference_worker.submit(
+                        frame, self.conf_spin.value(), self.iou_spin.value(),
+                        imgsz=adv_params["imgsz"], device=adv_params["device"], max_det=adv_params["max_det"]
+                    )
         else:
             if self._inference_worker.is_busy:
                 self.fps_label.setText(f"FPS: {self._fps:.1f}")
             else:
-                self._inference_worker.submit(frame, self.conf_spin.value())
+                adv_params = self._get_advanced_params()
+                self._inference_worker.submit(
+                    frame, self.conf_spin.value(), self.iou_spin.value(),
+                    imgsz=adv_params["imgsz"], device=adv_params["device"], max_det=adv_params["max_det"]
+                )
 
     def _on_stop(self) -> None:
         self.timer.stop()
@@ -714,8 +753,49 @@ class TestWidget(QWidget):
         self.validate_btn.setEnabled(True)
         self.validate_btn.setText("验证模型")
         if metrics:
-            self.val_map50_label.setText(f"mAP50: {metrics.get('map50', 0.0):.4f}")
-            self.val_map50_95_label.setText(f"mAP50-95: {metrics.get('map50_95', 0.0):.4f}")
+            task = metrics.get("task", "detect")
+            self.val_task_label.setText(f"任务类型: {task}")
+            # 先隐藏所有特定任务标签
+            self.val_map50_label.setVisible(False)
+            self.val_map50_95_label.setVisible(False)
+            self.val_box_map50_label.setVisible(False)
+            self.val_box_map50_95_label.setVisible(False)
+            self.val_top1_label.setVisible(False)
+            self.val_top5_label.setVisible(False)
+            # 根据任务类型显示对应指标
+            if task == "detect":
+                self.val_map50_label.setText(f"mAP50 (box): {metrics.get('map50', 0.0):.4f}")
+                self.val_map50_95_label.setText(f"mAP50-95 (box): {metrics.get('map50_95', 0.0):.4f}")
+                self.val_map50_label.setVisible(True)
+                self.val_map50_95_label.setVisible(True)
+            elif task == "segment":
+                self.val_map50_label.setText(f"mAP50 (mask): {metrics.get('map50', 0.0):.4f}")
+                self.val_map50_95_label.setText(f"mAP50-95 (mask): {metrics.get('map50_95', 0.0):.4f}")
+                self.val_map50_label.setVisible(True)
+                self.val_map50_95_label.setVisible(True)
+                # 可选显示 box 指标
+                if "box_map50" in metrics:
+                    self.val_box_map50_label.setText(f"mAP50 (box): {metrics.get('box_map50', 0.0):.4f}")
+                    self.val_box_map50_label.setVisible(True)
+                if "box_map50_95" in metrics:
+                    self.val_box_map50_95_label.setText(f"mAP50-95 (box): {metrics.get('box_map50_95', 0.0):.4f}")
+                    self.val_box_map50_95_label.setVisible(True)
+            elif task == "pose":
+                self.val_map50_label.setText(f"mAP50 (pose): {metrics.get('map50', 0.0):.4f}")
+                self.val_map50_95_label.setText(f"mAP50-95 (pose): {metrics.get('map50_95', 0.0):.4f}")
+                self.val_map50_label.setVisible(True)
+                self.val_map50_95_label.setVisible(True)
+            elif task == "classify":
+                self.val_top1_label.setText(f"Top-1 Acc: {metrics.get('top1', 0.0):.4f}")
+                self.val_top5_label.setText(f"Top-5 Acc: {metrics.get('top5', 0.0):.4f}")
+                self.val_top1_label.setVisible(True)
+                self.val_top5_label.setVisible(True)
+            else:
+                # 其他任务（如 obb）使用 box 指标
+                self.val_map50_label.setText(f"mAP50: {metrics.get('map50', 0.0):.4f}")
+                self.val_map50_95_label.setText(f"mAP50-95: {metrics.get('map50_95', 0.0):.4f}")
+                self.val_map50_label.setVisible(True)
+                self.val_map50_95_label.setVisible(True)
             self.val_result_group.setVisible(True)
         else:
             QMessageBox.warning(self, "警告", "模型验证失败，请检查数据集配置")
@@ -729,16 +809,13 @@ class TestWidget(QWidget):
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
             return
-        self.export_settings_group.setVisible(True)
-        self._update_export_params_visibility(self.export_format_combo.currentText())
+        task = self.predictor.get_model_info().get("task", "")
+        dlg = ExportDialog(task=task, parent=self)
+        dlg.export_requested.connect(self._on_dialog_export)
+        self._export_dialog = dlg
+        dlg.exec()
 
-    def _update_export_params_visibility(self, fmt: str) -> None:
-        params = FORMAT_PARAMS.get(fmt, set())
-        for key, widget in self._export_param_widgets.items():
-            widget.setVisible(key in params)
-
-    def _on_confirm_export(self) -> None:
-        fmt = self.export_format_combo.currentText()
+    def _on_dialog_export(self, fmt: str, kwargs: dict) -> None:
         output_dir = ""
         if self._project_config is not None:
             output_dir = str(Path(self._project_config.project_path) / "models")
@@ -746,26 +823,6 @@ class TestWidget(QWidget):
             output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not output_dir:
             return
-        params = FORMAT_PARAMS.get(fmt, set())
-        kwargs = {}
-        if "imgsz" in params:
-            kwargs["imgsz"] = int(self.export_imgsz_combo.currentText())
-        if "half" in params and self.export_half_check.isChecked():
-            kwargs["half"] = True
-        if "int8" in params and self.export_int8_check.isChecked():
-            kwargs["int8"] = True
-        if "dynamic" in params and self.export_dynamic_check.isChecked():
-            kwargs["dynamic"] = True
-        if "batch" in params and self.export_batch_spin.value() > 1:
-            kwargs["batch"] = self.export_batch_spin.value()
-        if "opset" in params:
-            kwargs["opset"] = self.export_opset_spin.value()
-        if "workspace" in params:
-            kwargs["workspace"] = self.export_workspace_spin.value()
-        if "simplify" in params:
-            kwargs["simplify"] = self.export_simplify_check.isChecked()
-        self.confirm_export_btn.setEnabled(False)
-        self.confirm_export_btn.setText("导出中...")
         self._export_worker = _ExportWorker(self.predictor, fmt, output_dir, **kwargs)
         self._export_worker.done_signal.connect(self._on_export_done)
         self._export_worker.error_signal.connect(self._on_export_error)
@@ -773,28 +830,68 @@ class TestWidget(QWidget):
         self._export_worker.finished.connect(self._export_worker.deleteLater)
         self._export_worker.finished.connect(lambda: setattr(self, '_export_worker', None))
 
-    def _on_export_done(self, exported_path: str) -> None:
-        self.confirm_export_btn.setEnabled(True)
-        self.confirm_export_btn.setText("确认导出")
+    def _on_export_done(self, exported_path: str, success: bool, error_msg: str) -> None:
+        dlg = getattr(self, '_export_dialog', None)
+        if dlg is not None:
+            dlg.accept()
         if exported_path:
-            fmt = self.export_format_combo.currentText()
-            summary = f"格式: {fmt}"
-            if self.export_half_check.isChecked() and "half" in FORMAT_PARAMS.get(fmt, set()):
-                summary += "\nFP16: 是"
-            if self.export_int8_check.isChecked() and "int8" in FORMAT_PARAMS.get(fmt, set()):
-                summary += "\nINT8: 是"
-            if self.export_dynamic_check.isChecked() and "dynamic" in FORMAT_PARAMS.get(fmt, set()):
-                summary += "\n动态尺寸: 是"
-            if self.export_batch_spin.value() > 1 and "batch" in FORMAT_PARAMS.get(fmt, set()):
-                summary += f"\n批量: {self.export_batch_spin.value()}"
-            QMessageBox.information(self, "导出成功", f"模型已导出至:\n{exported_path}\n\n{summary}")
-            self.export_settings_group.setVisible(False)
+            task = self.predictor.get_model_info().get("task", "")
+            if success:
+                reply = QMessageBox.question(
+                    self, "导出成功",
+                    f"模型已导出至:\n{exported_path}\n\n是否加载导出模型进行测试？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.model_path_edit.setText(exported_path)
+                    success_load = self.predictor.load_model(exported_path, task=task)
+                    if success_load:
+                        info = self.predictor.get_model_info()
+                        model_task = info.get("task", "unknown")
+                        names = info.get("class_names", [])
+                        msg = f"模型加载成功\n格式: ONNX\n任务类型: {model_task}\n类别数: {len(names)}"
+                        if names:
+                            msg += f"\n类别: {', '.join(names[:10])}"
+                            if len(names) > 10:
+                                msg += "..."
+                        self.model_loaded.emit(self.predictor.model)
+                        QMessageBox.information(self, "成功", msg)
+                    else:
+                        QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
+            else:
+                # Export succeeded but verification failed
+                reply = QMessageBox.question(
+                    self, "导出成功但验证失败",
+                    f"模型已导出至:\n{exported_path}\n\n验证失败: {error_msg}\n\n"
+                    f"导出的模型文件可能无法正常推理，是否仍要加载测试？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.model_path_edit.setText(exported_path)
+                    success_load = self.predictor.load_model(exported_path, task=task)
+                    if success_load:
+                        info = self.predictor.get_model_info()
+                        model_task = info.get("task", "unknown")
+                        names = info.get("class_names", [])
+                        msg = f"模型加载成功\n格式: ONNX\n任务类型: {model_task}\n类别数: {len(names)}"
+                        if names:
+                            msg += f"\n类别: {', '.join(names[:10])}"
+                            if len(names) > 10:
+                                msg += "..."
+                        self.model_loaded.emit(self.predictor.model)
+                        QMessageBox.information(self, "成功", msg)
+                    else:
+                        QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
         else:
             QMessageBox.critical(self, "错误", "模型导出失败")
 
     def _on_export_error(self, msg: str) -> None:
-        self.confirm_export_btn.setEnabled(True)
-        self.confirm_export_btn.setText("确认导出")
+        dlg = getattr(self, '_export_dialog', None)
+        if dlg is not None:
+            dlg._confirm_btn.setEnabled(True)
+            dlg._confirm_btn.setText("确认导出")
         QMessageBox.critical(self, "错误", f"模型导出出错:\n{msg}")
 
     def _display_np_image(self, image_np: np.ndarray) -> None:

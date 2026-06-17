@@ -7,6 +7,25 @@ from pathlib import Path
 from typing import List, Union
 
 
+AUGMENTATION_PRESET_ALIASES = {
+    "off": "off",
+    "关闭": "off",
+    "light": "light",
+    "轻度": "light",
+    "default": "default",
+    "默认": "default",
+    "strong": "strong",
+    "强增强": "strong",
+    "custom": "custom",
+    "自定义": "custom",
+}
+
+
+def normalize_augmentation_preset(value: object) -> str:
+    preset = str(value or "default").strip()
+    return AUGMENTATION_PRESET_ALIASES.get(preset, "default")
+
+
 @dataclass
 class ClassItem:
     name: str = ""
@@ -39,9 +58,36 @@ class TrainConfig:
     patience: int = 100
     project: str = ""
     name: str = ""
+    workers: int = 8
+    cache: bool = False
+    seed: int = 0
+    plots: bool = True
+    close_mosaic: int = 10
+    model_family: str = "yolo26"
+    pretrained_model: str = ""
+    augmentation_enabled: bool = True
+    augmentation_preset: str = "default"
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+    degrees: float = 0.0
+    translate: float = 0.1
+    scale: float = 0.5
+    shear: float = 0.0
+    perspective: float = 0.0
+    flipud: float = 0.0
+    fliplr: float = 0.5
+    mosaic: float = 1.0
+    mixup: float = 0.0
+    cutmix: float = 0.0
+    copy_paste: float = 0.0
+    erasing: float = 0.4
+    auto_augment: str = "randaugment"
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data["augmentation_preset"] = normalize_augmentation_preset(data.get("augmentation_preset"))
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> TrainConfig:
@@ -58,6 +104,31 @@ class TrainConfig:
             patience=data.get("patience", 100),
             project=data.get("project", ""),
             name=data.get("name", ""),
+            workers=data.get("workers", 8),
+            cache=data.get("cache", False),
+            seed=data.get("seed", 0),
+            plots=data.get("plots", True),
+            close_mosaic=data.get("close_mosaic", 10),
+            model_family=data.get("model_family", "yolo26"),
+            pretrained_model=data.get("pretrained_model", ""),
+            augmentation_enabled=data.get("augmentation_enabled", True),
+            augmentation_preset=normalize_augmentation_preset(data.get("augmentation_preset", "default")),
+            hsv_h=data.get("hsv_h", 0.015),
+            hsv_s=data.get("hsv_s", 0.7),
+            hsv_v=data.get("hsv_v", 0.4),
+            degrees=data.get("degrees", 0.0),
+            translate=data.get("translate", 0.1),
+            scale=data.get("scale", 0.5),
+            shear=data.get("shear", 0.0),
+            perspective=data.get("perspective", 0.0),
+            flipud=data.get("flipud", 0.0),
+            fliplr=data.get("fliplr", 0.5),
+            mosaic=data.get("mosaic", 1.0),
+            mixup=data.get("mixup", 0.0),
+            cutmix=data.get("cutmix", 0.0),
+            copy_paste=data.get("copy_paste", 0.0),
+            erasing=data.get("erasing", 0.4),
+            auto_augment=data.get("auto_augment", "randaugment"),
         )
 
 

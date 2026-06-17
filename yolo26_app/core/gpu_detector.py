@@ -109,8 +109,5 @@ class GPUDetectWorker(QThread):
             self.result_ready.emit(cached[0], cached[1])
             return
         status, name = detect_gpu_subprocess(timeout=self.timeout)
-        if status == "gpu":
-            save_gpu_cache("gpu", name)
-        elif status == "cpu":
-            save_gpu_cache("cpu", "")
+        save_gpu_cache(status, name)
         self.result_ready.emit(status, name)

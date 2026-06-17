@@ -40,6 +40,68 @@ from yolo26_app.core.yolo_exporter import YOLOExporter
 from yolo26_app.ui import styles
 
 
+class _FlipIdxDialog(QDialog):
+    """flip_idx 配置对话框，用于 pose 任务导出时配置左右翻转映射"""
+
+    def __init__(self, kpt_count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("配置 flip_idx（左右翻转映射）")
+        self._kpt_count = kpt_count
+        self._spin_boxes: List[QSpinBox] = []
+
+        layout = QVBoxLayout(self)
+
+        # 说明文字
+        info_label = QLabel(
+            "flip_idx 用于定义关键点的左右翻转映射。\n"
+            "当图像水平翻转时，关键点索引 i 会映射到 flip_idx[i]。\n"
+            "例如：左手腕(索引3) → 右手腕(索引4)，则 flip_idx[3]=4, flip_idx[4]=3。\n\n"
+            "如果不配置，训练时将不使用水平翻转数据增强。"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        # 配置区域
+        form_widget = QWidget()
+        form_layout = QGridLayout(form_widget)
+
+        header_idx = QLabel("关键点索引")
+        header_flip = QLabel("翻转后索引")
+        form_layout.addWidget(header_idx, 0, 0)
+        form_layout.addWidget(header_flip, 0, 1)
+
+        for i in range(kpt_count):
+            idx_label = QLabel(f"关键点 {i}")
+            spin = QSpinBox()
+            spin.setRange(-1, kpt_count - 1)
+            spin.setValue(-1)  # 默认 -1 表示不翻转
+            spin.setSpecialValueText("不翻转")
+            form_layout.addWidget(idx_label, i + 1, 0)
+            form_layout.addWidget(spin, i + 1, 1)
+            self._spin_boxes.append(spin)
+
+        layout.addWidget(form_widget)
+
+        # 按钮
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_flip_idx(self) -> Optional[List[int]]:
+        """获取用户配置的 flip_idx，如果全部为 -1 则返回 None"""
+        flip_idx = []
+        for spin in self._spin_boxes:
+            flip_idx.append(spin.value())
+
+        # 如果全部为 -1（不翻转），则返回 None 表示不配置
+        if all(v == -1 for v in flip_idx):
+            return None
+        return flip_idx
+
+
 class _ClassMappingDialog(QDialog):
     def __init__(self, model_class_names: list[str], project_class_names: list[str], parent=None):
         super().__init__(parent)
@@ -457,6 +519,21 @@ class AnnotateWidget(QWidget):
             return classes[idx].kpt_count
         return 0
 
+    def _get_max_kpt_count(self) -> int:
+        """获取所有类别中最大的关键点数量"""
+        classes = self._label_manager.get_all_classes()
+        max_kpt = 0
+        for cls in classes:
+            if cls.kpt_count > max_kpt:
+                max_kpt = cls.kpt_count
+        # 如果类别中没有配置，从标注数据中获取
+        if max_kpt == 0:
+            for anns in self._annotations_dict.values():
+                for ann in anns:
+                    if ann.keypoints and len(ann.keypoints) > max_kpt:
+                        max_kpt = len(ann.keypoints)
+        return max_kpt
+
     def _delete_selected(self) -> None:
         self._scene.delete_selected()
         self._save_current_annotations()
@@ -634,6 +711,7 @@ class AnnotateWidget(QWidget):
             self._label_manager.add_class(name, kpt_count=kpt_count)
             self._update_class_list()
             self._update_scene_colors()
+            self._persist_classes()
 
     def _remove_class(self) -> None:
         row = self._class_list_widget.currentRow()
@@ -642,6 +720,7 @@ class AnnotateWidget(QWidget):
         self._label_manager.remove_class(row)
         self._update_class_list()
         self._update_scene_colors()
+        self._persist_classes()
 
     def _on_class_selected(self, row: int) -> None:
         if row >= 0:
@@ -661,6 +740,22 @@ class AnnotateWidget(QWidget):
         colors = [c.color for c in self._label_manager.get_all_classes()]
         self._scene.set_class_colors(colors)
         self._scene.set_class_names([c.name for c in self._label_manager.get_all_classes()])
+
+    def _persist_classes(self) -> None:
+        """将类别列表保存到项目配置文件"""
+        window = self.window()
+        if not hasattr(window, "current_project_config"):
+            return
+        project_config = window.current_project_config
+        if project_config is None:
+            return
+        project_config.classes = self._label_manager.get_all_classes()
+        try:
+            from pathlib import Path
+            config_path = Path(project_config.project_path) / "project_config.json"
+            project_config.save(config_path)
+        except Exception:
+            pass
 
     def _sam_annotate(self) -> None:
         if not self._current_image_path:
@@ -883,6 +978,8 @@ class AnnotateWidget(QWidget):
         if not output_dir:
             return
 
+        flip_idx: Optional[List[int]] = None  # flip_idx 配置，默认不配置
+
         has_polygon = any(
             a.item_type == "polygon"
             for anns in self._annotations_dict.values()
@@ -890,7 +987,7 @@ class AnnotateWidget(QWidget):
         )
         task = "detect"
         if has_polygon:
-            items = ["detect — 多边形自动转为矩形框", "segment — 保留多边形用于分割训练", "pose — 关键点姿态格式"]
+            items = ["detect — 多边形自动转为矩形框", "segment — 保留多边形用于分割训练", "pose — 关键点姿态格式", "classify — 分类任务（使用目录结构）"]
             item, ok = QInputDialog.getItem(
                 self, "选择导出格式",
                 "检测到多边形标注，请选择导出格式：",
@@ -902,16 +999,57 @@ class AnnotateWidget(QWidget):
                 task = "segment"
             elif "pose" in item:
                 task = "pose"
+                # pose 任务时询问用户配置 flip_idx
+                kpt_count = self._get_max_kpt_count()
+                if kpt_count > 0:
+                    flip_dlg = _FlipIdxDialog(kpt_count, self)
+                    result = flip_dlg.exec()
+                    if result == QDialog.DialogCode.Accepted:
+                        flip_idx = flip_dlg.get_flip_idx()
+                    else:
+                        flip_idx = None  # 用户取消，不配置 flip_idx
+                else:
+                    flip_idx = None
+            elif "classify" in item:
+                task = "classify"
+                QMessageBox.information(
+                    self, "classify 导出说明",
+                    "classify 任务使用目录结构导出：\n"
+                    "- train/<class_name>/<image_files>\n"
+                    "- val/<class_name>/<image_files>\n\n"
+                    "图片将根据其主要类别（标注数量最多的类别）复制到对应目录。\n"
+                    "不生成 labels 目录和 .txt 标签文件。"
+                )
             else:
                 task = "detect"
         else:
             window = self.window()
             if hasattr(window, "train_widget"):
                 task = window.train_widget.task_combo.currentText()
+            # 如果当前任务是 classify，显示提示
+            if task == "classify":
+                QMessageBox.information(
+                    self, "classify 导出说明",
+                    "classify 任务使用目录结构导出：\n"
+                    "- train/<class_name>/<image_files>\n"
+                    "- val/<class_name>/<image_files>\n\n"
+                    "图片将根据其主要类别（标注数量最多的类别）复制到对应目录。\n"
+                    "不生成 labels 目录和 .txt 标签文件。"
+                )
+            # pose 任务时询问用户配置 flip_idx
+            elif task == "pose":
+                kpt_count = self._get_max_kpt_count()
+                if kpt_count > 0:
+                    flip_dlg = _FlipIdxDialog(kpt_count, self)
+                    result = flip_dlg.exec()
+                    if result == QDialog.DialogCode.Accepted:
+                        flip_idx = flip_dlg.get_flip_idx()
+                    else:
+                        flip_idx = None  # 用户取消，不配置 flip_idx
 
         try:
             yaml_path, stats = YOLOExporter.export_dataset(
-                self._annotations_dict, classes, output_dir, task=task
+                self._annotations_dict, classes, output_dir, task=task, flip_idx=flip_idx
             )
             msg = f"导出完成!\n训练集: {stats['train_count']} 张\n验证集: {stats['val_count']} 张\n跳过: {stats['skipped_count']} 张"
             QMessageBox.information(self, "导出成功", msg)
@@ -999,6 +1137,8 @@ class AnnotateWidget(QWidget):
                 elif ann.item_type == "polygon" and ann.polygon is not None:
                     d["polygon"] = [[ann.polygon.at(i).x(), ann.polygon.at(i).y()]
                                     for i in range(ann.polygon.size())]
+                if ann.keypoints:
+                    d["keypoints"] = [[pt.x(), pt.y()] for pt in ann.keypoints]
                 items.append(d)
             serialized[path] = items
         data = {"image_list": self._image_list, "annotations": serialized}
@@ -1039,11 +1179,13 @@ class AnnotateWidget(QWidget):
                 if "polygon" in d:
                     for pt in d["polygon"]:
                         polygon.append(QPointF(pt[0], pt[1]))
+                keypoints = [QPointF(pt[0], pt[1]) for pt in d.get("keypoints", [])]
                 anns.append(AnnotationItem(
                     class_index=d.get("class_index", 0),
                     rect=rect,
                     polygon=polygon if "polygon" in d else QPolygonF(),
                     item_type=d.get("item_type", "rect"),
+                    keypoints=keypoints,
                 ))
             self._annotations_dict[path] = anns
         self._image_list_widget.clear()

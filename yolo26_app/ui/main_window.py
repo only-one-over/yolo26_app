@@ -208,10 +208,11 @@ class MainWindow(QMainWindow):
 
     def _detect_gpu_async(self) -> None:
         exit_flag = load_exit_flag()
-        timeout = 3.0 if exit_flag is False else 5.0
+        save_exit_flag(False)
+        timeout = 8.0 if not exit_flag else 10.0
         if exit_flag is False:
             self._device_label.setText("⚠️ 上次未正常退出，缩短超时检测 GPU...")
-            self.statusbar.showMessage("上次未正常退出，GPU 检测使用缩短超时 (3s)", 5000)
+            self.statusbar.showMessage("上次未正常退出，GPU 检测使用缩短超时 (8s)", 5000)
         self._gpu_detect_worker = GPUDetectWorker(self, timeout=timeout)
         self._gpu_detect_worker.result_ready.connect(self._on_gpu_detected)
         self._gpu_detect_worker.finished.connect(self._gpu_detect_worker.deleteLater)
@@ -230,9 +231,46 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(DARK_STYLE)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # 检查是否有后台任务正在运行
+        if self._has_running_tasks():
+            reply = QMessageBox.question(
+                self, "确认退出",
+                "有任务正在运行中，确定要退出吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            self._stop_all_tasks()
+
         self._save_app_state()
         save_exit_flag(True)
         event.accept()
+
+    def _has_running_tasks(self) -> bool:
+        """检查是否有后台任务正在运行"""
+        # 检查训练线程
+        if hasattr(self, 'train_widget') and self.train_widget is not None:
+            if self.train_widget._trainer and self.train_widget._trainer.isRunning():
+                return True
+        # 检查摄像头/RealSense
+        if hasattr(self, 'test_widget') and self.test_widget is not None:
+            if hasattr(self.test_widget, 'timer') and self.test_widget.timer.isActive():
+                return True
+            if hasattr(self.test_widget, 'rs_camera') and self.test_widget.rs_camera.running:
+                return True
+        return False
+
+    def _stop_all_tasks(self) -> None:
+        """停止所有后台任务"""
+        if hasattr(self, 'train_widget') and self.train_widget is not None:
+            if self.train_widget._trainer and self.train_widget._trainer.isRunning():
+                self.train_widget._trainer.stop()
+                self.train_widget._trainer.wait(3000)
+        if hasattr(self, 'test_widget') and self.test_widget is not None:
+            if hasattr(self.test_widget, '_on_stop'):
+                self.test_widget._on_stop()
 
     def _save_app_state(self) -> None:
         state = {
