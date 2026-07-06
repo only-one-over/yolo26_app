@@ -5,8 +5,18 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread
-from PyQt6.QtGui import QPixmap, QImage, QIcon, QColor, QPainter, QBrush, QPolygonF
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
+from PyQt6.QtGui import (
+    QPixmap,
+    QImage,
+    QIcon,
+    QColor,
+    QPainter,
+    QBrush,
+    QPolygonF,
+    QKeySequence,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -30,13 +40,14 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QSpinBox,
     QLineEdit,
+    QAbstractSpinBox,
 )
 
 from yolo26_app.core.annotation_canvas import AnnotationScene, AnnotationView, AnnotationItem
 from yolo26_app.core.config import ClassItem, ProjectConfig
 from yolo26_app.core.label_manager import LabelManager
+from yolo26_app.core.persistence import write_json_atomic
 from yolo26_app.core.project_manager import ProjectManager
-from yolo26_app.core.yolo_exporter import YOLOExporter
 from yolo26_app.ui import styles
 
 
@@ -280,6 +291,7 @@ class _ThumbnailWorker(QThread):
 
 class AnnotateWidget(QWidget):
     export_requested = pyqtSignal()
+    state_changed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -297,6 +309,10 @@ class AnnotateWidget(QWidget):
         self._batch_progress = None
         self._thumb_worker: Optional[_ThumbnailWorker] = None
         self._download_worker = None
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(0)
+        self._autosave_timer.timeout.connect(self._save_annotations_to_project)
 
         self._setup_ui()
         self._connect_signals()
@@ -502,6 +518,38 @@ class AnnotateWidget(QWidget):
         self._btn_add_class.clicked.connect(self._add_class)
         self._btn_remove_class.clicked.connect(self._remove_class)
         self._class_list_widget.currentRowChanged.connect(self._on_class_selected)
+        self._scene.annotations_changed.connect(self._on_annotations_changed)
+
+        self._next_image_shortcut = QShortcut(QKeySequence("Space"), self)
+        self._next_image_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._next_image_shortcut.setAutoRepeat(False)
+        self._next_image_shortcut.activated.connect(self._go_to_next_image)
+
+    def _on_annotations_changed(self) -> None:
+        self._save_current_annotations()
+        self._schedule_autosave()
+
+    def _schedule_autosave(self) -> None:
+        self.state_changed.emit()
+        self._autosave_timer.start()
+
+    def flush_autosave(self) -> None:
+        self._autosave_timer.stop()
+        self._save_current_annotations()
+        self._save_annotations_to_project()
+
+    def _go_to_next_image(self) -> None:
+        if QApplication.activeModalWidget() is not None:
+            return
+        focus_widget = QApplication.focusWidget()
+        if isinstance(focus_widget, (QLineEdit, QAbstractSpinBox, QComboBox)):
+            return
+
+        row = self._image_list_widget.currentRow()
+        if row < 0 and self._image_list_widget.count() > 0:
+            self._image_list_widget.setCurrentRow(0)
+        elif row < self._image_list_widget.count() - 1:
+            self._image_list_widget.setCurrentRow(row + 1)
 
     def _set_tool(self, tool: str) -> None:
         self._btn_rect.setChecked(tool == "rect")
@@ -538,6 +586,41 @@ class AnnotateWidget(QWidget):
         self._scene.delete_selected()
         self._save_current_annotations()
 
+    def _copy_to_project_images(self, src_path: str) -> str:
+        """将素材复制到项目 images/ 目录，返回相对项目路径的路径。
+
+        无项目时返回原路径；已在 images/ 内返回相对路径；否则复制（重名加序号）。
+        """
+        window = self.window()
+        if not hasattr(window, "current_project_config") or window.current_project_config is None:
+            return src_path
+        config = window.current_project_config
+        project_path = config.project_path
+        images_dir = ProjectManager.get_images_dir(config)
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        src = Path(src_path)
+        # 若已在 images/ 内，直接返回相对路径
+        try:
+            rel = os.path.relpath(src_path, project_path)
+        except ValueError:
+            rel = src_path
+        if os.path.isfile(os.path.join(project_path, rel)) and src_path == os.path.join(project_path, rel):
+            return rel.replace(os.sep, "/")
+
+        # 复制到 images/，重名加序号
+        dest = images_dir / src.name
+        if dest.resolve() == src.resolve():
+            return os.path.relpath(str(dest), project_path).replace(os.sep, "/")
+        counter = 1
+        stem, suffix = src.stem, src.suffix
+        while dest.exists():
+            dest = images_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+        import shutil
+        shutil.copy2(str(src), str(dest))
+        return os.path.relpath(str(dest), project_path).replace(os.sep, "/")
+
     def _import_images(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self, "导入图片", "", "Images (*.jpg *.jpeg *.png *.bmp)"
@@ -545,11 +628,13 @@ class AnnotateWidget(QWidget):
         if not files:
             return
         for f in files:
-            if f not in self._image_list:
-                self._image_list.append(f)
-                self._annotations_dict.setdefault(f, [])
-                self._add_image_item(f)
+            stored = self._copy_to_project_images(f)
+            if stored not in self._image_list:
+                self._image_list.append(stored)
+                self._annotations_dict.setdefault(stored, [])
+                self._add_image_item(stored)
         self._start_thumbnail_loading()
+        self._schedule_autosave()
 
     def _import_directory(self) -> None:
         dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
@@ -566,13 +651,14 @@ class AnnotateWidget(QWidget):
             QMessageBox.warning(self, "提示", "所选目录中没有找到图片文件")
             return
         for path in image_files:
-            if path not in self._image_list:
-                self._image_list.append(path)
-                self._annotations_dict.setdefault(path, [])
-                self._add_image_item(path)
+            stored = self._copy_to_project_images(path)
+            if stored not in self._image_list:
+                self._image_list.append(stored)
+                self._annotations_dict.setdefault(stored, [])
+                self._add_image_item(stored)
         self._start_thumbnail_loading()
         self._image_list_widget.setCurrentRow(0)
-        self._on_image_selected(self._image_list_widget.currentItem(), None)
+        self._schedule_autosave()
 
     def _import_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -581,7 +667,12 @@ class AnnotateWidget(QWidget):
         if not path:
             return
         import cv2
-        temp_dir = tempfile.mkdtemp(prefix="yolo26_frames_")
+        window = self.window()
+        if hasattr(window, "current_project_config") and window.current_project_config is not None:
+            temp_dir = str(ProjectManager.get_images_dir(window.current_project_config))
+            os.makedirs(temp_dir, exist_ok=True)
+        else:
+            temp_dir = tempfile.mkdtemp(prefix="yolo26_frames_")
         cap = cv2.VideoCapture(path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
@@ -596,13 +687,15 @@ class AnnotateWidget(QWidget):
             if frame_idx % interval == 0:
                 out_path = os.path.join(temp_dir, f"frame_{saved_idx:06d}.jpg")
                 cv2.imwrite(out_path, frame)
-                self._image_list.append(out_path)
-                self._annotations_dict.setdefault(out_path, [])
-                self._add_image_item(out_path)
+                stored = self._copy_to_project_images(out_path) if (hasattr(window, "current_project_config") and window.current_project_config is not None) else out_path
+                self._image_list.append(stored)
+                self._annotations_dict.setdefault(stored, [])
+                self._add_image_item(stored)
                 saved_idx += 1
             frame_idx += 1
         cap.release()
         self._start_thumbnail_loading()
+        self._schedule_autosave()
 
     def _add_image_item(self, image_path: str) -> None:
         item = QListWidgetItem(os.path.basename(image_path))
@@ -636,8 +729,8 @@ class AnnotateWidget(QWidget):
     def _on_image_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:
         if current is None:
             return
-        self._save_annotations_to_project()
         self._save_current_annotations()
+        self._schedule_autosave()
         image_path = current.data(Qt.ItemDataRole.UserRole)
         self._current_image_path = image_path
         self._load_image(image_path)
@@ -743,6 +836,7 @@ class AnnotateWidget(QWidget):
 
     def _persist_classes(self) -> None:
         """将类别列表保存到项目配置文件"""
+        self.state_changed.emit()
         window = self.window()
         if not hasattr(window, "current_project_config"):
             return
@@ -771,7 +865,11 @@ class AnnotateWidget(QWidget):
             return
         if sam._predictor is None:
             model_info = None
-            scan_dirs = [os.getcwd()]
+            # SAM2 模型统一存到 system_model/sam2/
+            from yolo26_app.core.paths import SYSTEM_MODEL_SUBDIRS
+            sam2_dir = str(SYSTEM_MODEL_SUBDIRS["sam2"])
+            os.makedirs(sam2_dir, exist_ok=True)
+            scan_dirs = [sam2_dir]
             if self._current_image_path:
                 scan_dirs.append(os.path.dirname(self._current_image_path))
             for d in scan_dirs:
@@ -958,6 +1056,8 @@ class AnnotateWidget(QWidget):
                 self._scene._annotations.append(ann)
                 self._scene._draw_annotation(ann, len(self._scene._annotations) - 1)
             self._scene.annotations_changed.emit()
+        else:
+            self._schedule_autosave()
         detected_count = len(results_dict)
         QMessageBox.information(
             self, "逐帧检测完成",
@@ -974,9 +1074,13 @@ class AnnotateWidget(QWidget):
         if not has_annotations:
             QMessageBox.warning(self, "导出", "没有标注数据可导出")
             return
-        output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if not output_dir:
-            return
+        window = self.window()
+        if getattr(window, "current_project_config", None) is not None:
+            output_dir = str(ProjectManager.get_dataset_dir(window.current_project_config))
+        else:
+            output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
+            if not output_dir:
+                return
 
         flip_idx: Optional[List[int]] = None  # flip_idx 配置，默认不配置
 
@@ -1024,7 +1128,7 @@ class AnnotateWidget(QWidget):
                 task = "detect"
         else:
             window = self.window()
-            if hasattr(window, "train_widget"):
+            if getattr(window, "train_widget", None) is not None:
                 task = window.train_widget.task_combo.currentText()
             # 如果当前任务是 classify，显示提示
             if task == "classify":
@@ -1048,6 +1152,8 @@ class AnnotateWidget(QWidget):
                         flip_idx = None  # 用户取消，不配置 flip_idx
 
         try:
+            from yolo26_app.core.yolo_exporter import YOLOExporter
+
             yaml_path, stats = YOLOExporter.export_dataset(
                 self._annotations_dict, classes, output_dir, task=task, flip_idx=flip_idx
             )
@@ -1067,6 +1173,12 @@ class AnnotateWidget(QWidget):
         return self._label_manager
 
     def set_project_config(self, config: ProjectConfig) -> None:
+        self._autosave_timer.stop()
+        self._current_image_path = ""
+        self._image_list.clear()
+        self._annotations_dict.clear()
+        self._image_list_widget.clear()
+        self._scene.clear_annotations()
         self._label_manager.load_from_project(config)
         self._update_class_list()
         self._update_scene_colors()
@@ -1088,9 +1200,23 @@ class AnnotateWidget(QWidget):
                     d["keypoints"] = [[pt.x(), pt.y()] for pt in ann.keypoints]
                 items.append(d)
             serialized[path] = items
-        return {"annotations": serialized, "image_list": self._image_list}
+        return {
+            "annotations": serialized,
+            "image_list": self._image_list,
+            "current_image_path": self._current_image_path,
+            "classes": [item.to_dict() for item in self._label_manager.get_all_classes()],
+        }
 
     def restore_state(self, state: dict) -> None:
+        recovered_classes = [
+            ClassItem.from_dict(item)
+            for item in state.get("classes", [])
+            if isinstance(item, dict)
+        ]
+        if recovered_classes:
+            self._label_manager.load_from_project(ProjectConfig(classes=recovered_classes))
+            self._update_class_list()
+            self._update_scene_colors()
         annotations_data = state.get("annotations", {})
         self._image_list = state.get("image_list", [])
         self._annotations_dict.clear()
@@ -1115,18 +1241,22 @@ class AnnotateWidget(QWidget):
         for img_path in self._image_list:
             self._add_image_item(img_path)
         self._start_thumbnail_loading()
+        current_path = state.get("current_image_path", "")
+        if current_path in self._image_list:
+            self._image_list_widget.setCurrentRow(self._image_list.index(current_path))
 
-    def _save_annotations_to_project(self) -> None:
+    def _save_annotations_to_project(self) -> bool:
         if self._current_image_path:
             self._save_current_annotations()
         window = self.window()
         if not hasattr(window, "current_project_config"):
-            return
+            return False
         config = window.current_project_config
         if config is None:
-            return
+            return False
         if not self._annotations_dict and not self._image_list:
-            return
+            return False
+        project_path = config.project_path
         serialized: Dict[str, list] = {}
         for path, anns in self._annotations_dict.items():
             items = []
@@ -1140,14 +1270,21 @@ class AnnotateWidget(QWidget):
                 if ann.keypoints:
                     d["keypoints"] = [[pt.x(), pt.y()] for pt in ann.keypoints]
                 items.append(d)
-            serialized[path] = items
-        data = {"image_list": self._image_list, "annotations": serialized}
+            rel_path = os.path.relpath(path, project_path) if os.path.isabs(path) else path
+            serialized[rel_path] = items
+        data = {
+            "image_list": [os.path.relpath(p, project_path) if os.path.isabs(p) else p for p in self._image_list],
+            "annotations": serialized,
+            "current_image_path": os.path.relpath(self._current_image_path, project_path) if self._current_image_path and os.path.isabs(self._current_image_path) else self._current_image_path,
+        }
         annotations_path = ProjectManager.get_annotations_path(config)
         try:
-            with open(annotations_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+            write_json_atomic(annotations_path, data)
+            return True
+        except (PermissionError, OSError):
+            if hasattr(window, "statusbar"):
+                window.statusbar.showMessage("标注自动保存失败，请检查项目目录写入权限", 5000)
+            return False
 
     def _load_annotations_from_project(self) -> None:
         window = self.window()
@@ -1156,6 +1293,7 @@ class AnnotateWidget(QWidget):
         config = window.current_project_config
         if config is None:
             return
+        project_path = config.project_path
         annotations_path = ProjectManager.get_annotations_path(config)
         if not annotations_path.exists():
             return
@@ -1165,12 +1303,24 @@ class AnnotateWidget(QWidget):
         except (json.JSONDecodeError, OSError):
             return
         image_list = data.get("image_list", [])
+        # 相对路径还原为绝对路径，绝对路径直接用（老项目兼容）
+        restored_list = []
+        for p in image_list:
+            if os.path.isabs(p):
+                restored_list.append(p)
+            else:
+                restored_list.append(os.path.join(project_path, p))
+        image_list = restored_list
         annotations_data = data.get("annotations", {})
         valid_images = [p for p in image_list if os.path.isfile(p)]
         self._image_list = valid_images
         self._annotations_dict.clear()
         for path, items in annotations_data.items():
-            if not os.path.isfile(path):
+            if os.path.isabs(path):
+                abs_path = path
+            else:
+                abs_path = os.path.join(project_path, path)
+            if not os.path.isfile(abs_path):
                 continue
             anns: List[AnnotationItem] = []
             for d in items:
@@ -1187,8 +1337,15 @@ class AnnotateWidget(QWidget):
                     item_type=d.get("item_type", "rect"),
                     keypoints=keypoints,
                 ))
-            self._annotations_dict[path] = anns
+            self._annotations_dict[abs_path] = anns
         self._image_list_widget.clear()
         for img_path in self._image_list:
             self._add_image_item(img_path)
         self._start_thumbnail_loading()
+        current_path = data.get("current_image_path", "")
+        if current_path and not os.path.isabs(current_path):
+            current_path = os.path.join(project_path, current_path)
+        if current_path in self._image_list:
+            self._image_list_widget.setCurrentRow(self._image_list.index(current_path))
+        elif self._image_list:
+            self._image_list_widget.setCurrentRow(0)

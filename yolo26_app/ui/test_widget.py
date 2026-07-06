@@ -850,7 +850,8 @@ class TestWidget(QWidget):
                         info = self.predictor.get_model_info()
                         model_task = info.get("task", "unknown")
                         names = info.get("class_names", [])
-                        msg = f"模型加载成功\n格式: ONNX\n任务类型: {model_task}\n类别数: {len(names)}"
+                        format_name = self._exported_format_name(exported_path)
+                        msg = f"模型加载成功\n格式: {format_name}\n任务类型: {model_task}\n类别数: {len(names)}"
                         if names:
                             msg += f"\n类别: {', '.join(names[:10])}"
                             if len(names) > 10:
@@ -875,7 +876,8 @@ class TestWidget(QWidget):
                         info = self.predictor.get_model_info()
                         model_task = info.get("task", "unknown")
                         names = info.get("class_names", [])
-                        msg = f"模型加载成功\n格式: ONNX\n任务类型: {model_task}\n类别数: {len(names)}"
+                        format_name = self._exported_format_name(exported_path)
+                        msg = f"模型加载成功\n格式: {format_name}\n任务类型: {model_task}\n类别数: {len(names)}"
                         if names:
                             msg += f"\n类别: {', '.join(names[:10])}"
                             if len(names) > 10:
@@ -893,6 +895,15 @@ class TestWidget(QWidget):
             dlg._confirm_btn.setEnabled(True)
             dlg._confirm_btn.setText("确认导出")
         QMessageBox.critical(self, "错误", f"模型导出出错:\n{msg}")
+
+    @staticmethod
+    def _exported_format_name(path: str) -> str:
+        return {
+            ".onnx": "ONNX",
+            ".engine": "TensorRT",
+            ".torchscript": "TorchScript",
+            ".xml": "OpenVINO",
+        }.get(Path(path).suffix.lower(), Path(path).suffix.lstrip(".").upper())
 
     def _display_np_image(self, image_np: np.ndarray) -> None:
         if image_np.ndim == 2:

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -28,10 +28,13 @@ from PyQt6.QtGui import QAction, QCloseEvent
 from yolo26_app.core.config import ProjectConfig
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui.styles import DARK_STYLE
-from yolo26_app.ui.annotate_widget import AnnotateWidget
-from yolo26_app.ui.train_widget import TrainWidget
-from yolo26_app.ui.test_widget import TestWidget
-from yolo26_app.core.gpu_detector import GPUDetectWorker, load_exit_flag, save_exit_flag
+from yolo26_app.core.persistence import write_json_atomic
+
+if TYPE_CHECKING:
+    from yolo26_app.core.gpu_detector import GPUDetectWorker
+    from yolo26_app.ui.annotate_widget import AnnotateWidget
+    from yolo26_app.ui.train_widget import TrainWidget
+    from yolo26_app.ui.test_widget import TestWidget
 
 APP_STATE_DIR = Path.home() / ".yolo26_app"
 APP_STATE_FILE = APP_STATE_DIR / "app_state.json"
@@ -48,16 +51,22 @@ class NewProjectDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(8, 8, 8, 8)
 
+        # 项目名称：默认自动编号 project1, project2, ...
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("输入项目名称")
+        from yolo26_app.core.paths import PROJECTS_ROOT, ensure_workspace_dirs
+        ensure_workspace_dirs()
+        default_name = self._generate_default_name(PROJECTS_ROOT)
+        self.name_edit.setText(default_name)
         layout.addRow("项目名称:", self.name_edit)
 
+        # 项目路径：只读显示 my_project 根目录
         path_row = QHBoxLayout()
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("选择项目存储路径")
+        self.path_edit.setText(str(PROJECTS_ROOT))
+        self.path_edit.setReadOnly(True)
         self.browse_btn = QPushButton("浏览...")
         self.browse_btn.setMinimumWidth(80)
-        self.browse_btn.clicked.connect(self._browse_path)
+        self.browse_btn.setVisible(False)
         path_row.addWidget(self.path_edit)
         path_row.addWidget(self.browse_btn)
         layout.addRow("项目路径:", path_row)
@@ -69,21 +78,31 @@ class NewProjectDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
         layout.addRow(self.button_box)
 
-    def _browse_path(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择项目路径")
-        if path:
-            self.path_edit.setText(path)
+    @staticmethod
+    def _generate_default_name(root: Path) -> str:
+        """生成不冲突的默认项目名 project1, project2, ..."""
+        i = 1
+        while (root / f"project{i}").exists():
+            i += 1
+        return f"project{i}"
 
-    def get_project_info(self) -> Tuple[str, str]:
-        return self.name_edit.text().strip(), self.path_edit.text().strip()
+    def get_project_name(self) -> str:
+        return self.name_edit.text().strip()
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        # 启动时确保工作区目录结构存在
+        from yolo26_app.core.paths import ensure_workspace_dirs
+        ensure_workspace_dirs()
         self.current_project_config: Optional[ProjectConfig] = None
-        self._gpu_detect_worker: Optional[GPUDetectWorker] = None
-
+        self._gpu_detect_worker: Optional["GPUDetectWorker"] = None
+        self.annotate_widget: Optional["AnnotateWidget"] = None
+        self.train_widget: Optional["TrainWidget"] = None
+        self.test_widget: Optional["TestWidget"] = None
+        self._page_widgets: dict[int, QWidget] = {}
+        self._requested_page_index = 0
 
         self.setWindowTitle("YOLO26 App")
         self.setMinimumSize(1024, 768)
@@ -93,8 +112,11 @@ class MainWindow(QMainWindow):
         self._init_menu()
         self._init_statusbar()
         self._apply_style()
-        QTimer.singleShot(0, self._restore_app_state)
-        QTimer.singleShot(0, self._detect_gpu_async)
+        self._recovery_save_timer = QTimer(self)
+        self._recovery_save_timer.setSingleShot(True)
+        self._recovery_save_timer.setInterval(0)
+        self._recovery_save_timer.timeout.connect(self._save_app_state)
+        QTimer.singleShot(25, self._finish_startup)
 
     def _init_ui(self) -> None:
         central = QWidget()
@@ -129,47 +151,84 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
         main_layout.addWidget(sidebar)
 
-        self.annotate_widget = AnnotateWidget()
-        self.train_widget: Optional[TrainWidget] = None
-        self.test_widget: Optional[TestWidget] = None
-        self._widgets_created: dict = {0: True, 1: False, 2: False}
-
         self.stacked = QStackedWidget()
-        self.stacked.addWidget(self.annotate_widget)
+        self._startup_placeholder = QLabel("正在加载标注工作区...")
+        self._startup_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stacked.addWidget(self._startup_placeholder)
         main_layout.addWidget(self.stacked, 1)
 
         self.nav_buttons[0].setChecked(True)
 
     def _switch_page(self, index: int) -> None:
-        if not self._widgets_created.get(index):
-            self._ensure_widget(index)
-        self.stacked.setCurrentIndex(index)
+        self._requested_page_index = index
+        page = self._ensure_widget(index)
+        if page is not None:
+            self.stacked.setCurrentWidget(page)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+        if hasattr(self, "_recovery_save_timer"):
+            self._schedule_recovery_save()
 
-    def _ensure_widget(self, index: int) -> None:
-        if index == 1 and self.train_widget is None:
+    def _ensure_widget(self, index: int) -> Optional[QWidget]:
+        existing = self._page_widgets.get(index)
+        if existing is not None:
+            return existing
+
+        page: Optional[QWidget] = None
+        if index == 0 and self.annotate_widget is None:
+            from yolo26_app.ui.annotate_widget import AnnotateWidget
+
+            self.annotate_widget = AnnotateWidget()
+            self.annotate_widget.state_changed.connect(self._on_annotation_state_changed)
+            page = self.annotate_widget
+            if self.test_widget is not None:
+                self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
+        elif index == 1 and self.train_widget is None:
+            from yolo26_app.ui.train_widget import TrainWidget
+
             self.train_widget = TrainWidget()
-            self.stacked.addWidget(self.train_widget)
+            page = self.train_widget
             if self.current_project_config is not None:
                 self.train_widget.set_project_config(self.current_project_config)
-            self._widgets_created[1] = True
         elif index == 2 and self.test_widget is None:
+            from yolo26_app.ui.test_widget import TestWidget
+
             self.test_widget = TestWidget()
-            self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
-            self.stacked.addWidget(self.test_widget)
+            page = self.test_widget
+            if self.annotate_widget is not None:
+                self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
             if self.current_project_config is not None:
                 self.test_widget.set_project_config(self.current_project_config)
-            self._widgets_created[2] = True
+        if page is None:
+            return None
+
+        self._page_widgets[index] = page
+        self.stacked.addWidget(page)
+        if index == 0 and self._startup_placeholder is not None:
+            self.stacked.removeWidget(self._startup_placeholder)
+            self._startup_placeholder.deleteLater()
+            self._startup_placeholder = None
+        return page
+
+    def _finish_startup(self) -> None:
+        self._ensure_widget(0)
+        self._restore_app_state()
+        self._switch_page(self._requested_page_index)
+        self._detect_gpu_async()
 
     def _set_project_config(self, config: ProjectConfig) -> None:
+        if self.annotate_widget is not None and self.current_project_config is not None:
+            self.annotate_widget.flush_autosave()
         self.current_project_config = config
         self.setWindowTitle(f"YOLO26 App - {config.project_name}")
-        self.annotate_widget.set_project_config(config)
+        annotate_widget = self._ensure_widget(0)
+        if annotate_widget is not None:
+            self.annotate_widget.set_project_config(config)
         if self.train_widget is not None:
             self.train_widget.set_project_config(config)
         if self.test_widget is not None:
             self.test_widget.set_project_config(config)
+        self._schedule_recovery_save()
 
     def _init_menu(self) -> None:
         menubar = self.menuBar()
@@ -207,6 +266,8 @@ class MainWindow(QMainWindow):
         self.statusbar.addPermanentWidget(self._device_label)
 
     def _detect_gpu_async(self) -> None:
+        from yolo26_app.core.gpu_detector import GPUDetectWorker, load_exit_flag, save_exit_flag
+
         exit_flag = load_exit_flag()
         save_exit_flag(False)
         timeout = 8.0 if not exit_flag else 10.0
@@ -244,7 +305,12 @@ class MainWindow(QMainWindow):
                 return
             self._stop_all_tasks()
 
+        if self.annotate_widget is not None:
+            self.annotate_widget.flush_autosave()
+        self._recovery_save_timer.stop()
         self._save_app_state()
+        from yolo26_app.core.gpu_detector import save_exit_flag
+
         save_exit_flag(True)
         event.accept()
 
@@ -274,23 +340,30 @@ class MainWindow(QMainWindow):
 
     def _save_app_state(self) -> None:
         state = {
+            "last_exit_normal": False,
             "geometry": {
                 "x": self.x(),
                 "y": self.y(),
                 "width": self.width(),
                 "height": self.height(),
             },
+            "active_page": self._requested_page_index,
         }
         if self.current_project_config is not None:
             state["last_project_path"] = self.current_project_config.project_path
-            annotate_state = self.annotate_widget.save_state()
-            state["annotate_state"] = annotate_state
+        elif self.annotate_widget is not None:
+            state["annotate_state"] = self.annotate_widget.save_state()
         try:
-            APP_STATE_DIR.mkdir(parents=True, exist_ok=True)
-            with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
+            write_json_atomic(APP_STATE_FILE, state)
         except (PermissionError, OSError):
-            pass
+            self.statusbar.showMessage("自动恢复数据保存失败，请检查磁盘写入权限", 5000)
+
+    def _schedule_recovery_save(self) -> None:
+        self._recovery_save_timer.start()
+
+    def _on_annotation_state_changed(self) -> None:
+        if self.current_project_config is None:
+            self._schedule_recovery_save()
 
     def _restore_app_state(self) -> None:
         if not APP_STATE_FILE.exists():
@@ -312,21 +385,23 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         annotate_state = state.get("annotate_state")
-        if annotate_state:
+        if annotate_state and self.current_project_config is None and self.annotate_widget is not None:
             self.annotate_widget.restore_state(annotate_state)
+        active_page = state.get("active_page", 0)
+        if isinstance(active_page, int) and active_page in (0, 1, 2):
+            self._requested_page_index = active_page
 
     def _new_project(self) -> None:
         dialog = NewProjectDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        name, path = dialog.get_project_info()
+        name = dialog.get_project_name()
         if not name:
             QMessageBox.warning(self, "提示", "请输入项目名称")
             return
-        if not path:
-            QMessageBox.warning(self, "提示", "请选择项目路径")
-            return
+        from yolo26_app.core.paths import PROJECTS_ROOT
+        path = str(PROJECTS_ROOT)
 
         try:
             config = ProjectManager.create_project(name, path)
@@ -337,7 +412,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"创建项目失败:\n{e}")
 
     def _open_project(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择项目目录")
+        from yolo26_app.core.paths import PROJECTS_ROOT
+        path = QFileDialog.getExistingDirectory(self, "选择项目目录", str(PROJECTS_ROOT))
         if not path:
             return
 

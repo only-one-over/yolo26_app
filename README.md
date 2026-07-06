@@ -180,8 +180,11 @@ output_dir/
 
 ### 环境要求
 
-- Python 3.9+
+- Python 3.9+（推荐 3.10/3.11，3.12 部分依赖可能不兼容）
 - NVIDIA GPU（推荐，CPU 也可运行但速度较慢）
+- CUDA Toolkit 11.8 或 12.1+（需与 PyTorch 匹配）
+
+> ⚠️ **版本兼容性至关重要**：PyTorch / CUDA / TensorRT / Ultralytics 之间有严格的版本对应关系，版本不匹配是绝大多数问题的根因。请务必阅读下方[版本兼容与环境问题](#-版本兼容与环境问题)章节。
 
 ### 安装步骤
 
@@ -225,6 +228,8 @@ conda activate yolo26
 pip install -r requirements.txt
 ```
 
+> ⚠️ **Ultralytics 版本注意**：`requirements.txt` 要求 `ultralytics>=8.0`，但 TensorRT 10.x 用户需确保 Ultralytics ≥ 8.3.0（旧版本的 `BuilderFlag.FP16` 在 TensorRT 10 中已改为 `kFP16`，会导致导出报错）。如遇 `BuilderFlag has no attribute 'FP16'` 错误，执行 `pip install -U ultralytics`。
+
 **4. 安装 PyTorch（GPU 支持）**
 
 > ⚠️ **重要**：不要使用 `pip install torch` 默认安装，那会安装 CPU-only 版本，即使有 GPU 也无法使用！
@@ -236,7 +241,7 @@ nvidia-smi
 右上角显示 CUDA 版本（如 12.1、11.8），然后安装对应版本：
 
 ```bash
-# CUDA 12.1
+# CUDA 12.1（推荐，兼容性最好）
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 # CUDA 11.8
@@ -245,6 +250,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 # CUDA 12.4
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
+
+> ⚠️ **版本对应关系**：PyTorch 2.1+ 对应 CUDA 11.8/12.1；PyTorch 2.3+ 对应 CUDA 12.4。安装后务必运行下方"验证 GPU"步骤确认 `torch.cuda.is_available()` 返回 `True`。
 
 **5. 安装可选依赖**
 
@@ -293,17 +300,20 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 #### Step 1: 新建项目
 
 1. 菜单栏 → 文件 → 新建项目
-2. 输入项目名称和存储路径
+2. 输入项目名称（默认自动编号 project1、project2...），路径自动设为 `my_project/`
 3. 项目目录自动创建：
    ```
-   project_path/
+   my_project/你的项目名/
+   ├── images/                  # 素材目录（导入图片/视频帧自动复制到此）
+   ├── datasets/                # 数据集目录（导出数据集自动存到此）
+   ├── models/                  # 导出模型目录
+   ├── runs/                    # 训练运行记录
    ├── project_config.json      # 项目配置
-   ├── annotations.json         # 标注数据（自动保存）
-   ├── classes.txt              # 类别列表
-   ├── datasets/                # 数据集目录
-   ├── models/                  # 模型目录
-   └── runs/                    # 训练运行记录
+   ├── annotations.json         # 标注数据（自动保存，使用相对路径）
+   └── classes.txt              # 类别列表
    ```
+
+> 💡 项目统一存放在 `my_project/` 下，系统模型统一存放在 `system_model/` 下。整个项目文件夹可整体移动，标注引用不会失效。
 
 #### Step 2: 导入图片
 
@@ -344,7 +354,7 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 #### Step 6: 导出数据集
 
 1. 点击"导出数据集"按钮
-2. 选择输出目录
+2. 数据集自动导出到项目内 `datasets/` 目录（已打开项目时无需选择目录）
 3. 自动生成 YOLO 格式数据集（images/ + labels/ + data.yaml）
 
 #### Step 7: 训练模型
@@ -411,12 +421,13 @@ yolo26_app/
 ├── yolo26_app/                      # 应用主包
 │   ├── core/                        # 核心业务逻辑
 │   │   ├── config.py                # 数据模型 (ClassItem, TrainConfig, ProjectConfig)
+│   │   ├── paths.py                 # 工作区路径常量 (system_model/my_project)
 │   │   ├── project_manager.py       # 项目管理（创建/打开/最近项目/路径）
 │   │   ├── label_manager.py         # 标注类别管理（增删改查/颜色分配）
 │   │   ├── annotation_canvas.py     # 标注画布 (Scene + View + 撤销/重做 + 增量绘制)
 │   │   ├── yolo_exporter.py         # YOLO 数据集导出（格式转换/校验/划分）
 │   │   ├── trainer.py               # YOLO 训练器 (QThread + 回调进度)
-│   │   ├── predictor.py             # YOLO 推理器（加载/推理/验证/导出）
+│   │   ├── predictor.py             # YOLO 推理器（加载/推理/验证/导出/TensorRT兼容）
 │   │   ├── auto_annotator.py        # 辅助标注 (SAM/DINO)
 │   │   ├── gpu_detector.py          # GPU 检测 (异步/超时保护/缓存/安全模式)
 │   │   ├── task_manager.py          # 后台任务管理器 (异步/超时/回调)
@@ -426,7 +437,13 @@ yolo26_app/
 │       ├── annotate_widget.py       # 标注模块 (持久化/批量检测/类别映射/辅助标注)
 │       ├── train_widget.py          # 训练模块 (参数配置/进度显示/日志)
 │       ├── test_widget.py           # 测试模块 (异步推理/验证/导出/帧跳过)
+│       ├── export_dialog.py         # 导出对话框 (格式/参数/预设)
 │       └── styles.py                # QSS 样式表 (Catppuccin Mocha/Latte)
+├── system_model/                    # 系统模型目录（自动创建）
+│   ├── yolo/                        # 训练预训练模型 (yolo26n.pt 等)
+│   ├── sam2/                        # SAM2 分割模型权重
+│   └── grounding_dino/              # GroundingDINO 模型权重
+├── my_project/                      # 用户项目目录（自动创建）
 ├── requirements.txt                 # 依赖清单
 ├── pyproject.toml                   # 项目配置
 ├── CODE_WIKI.md                     # 详细架构文档
@@ -584,6 +601,118 @@ names: ['person', 'car']
 
 ---
 
+## 🔧 版本兼容与环境问题
+
+本章节详细说明各依赖之间的版本兼容关系，以及常见环境问题的排查方法。
+
+### 版本对应关系总表
+
+| 组件 | 推荐版本 | 兼容版本 | 备注 |
+|------|---------|---------|------|
+| Python | 3.10 / 3.11 | 3.9 - 3.11 | 3.12 部分依赖（如 SAM2）可能不兼容 |
+| PyTorch | 2.1+ | 2.0 - 2.4 | 需与 CUDA 版本严格匹配 |
+| CUDA Toolkit | 12.1 | 11.8 / 12.1 / 12.4 | `nvidia-smi` 显示的版本是驱动支持的最高版本 |
+| Ultralytics | ≥ 8.3.0 | ≥ 8.0 | TensorRT 10 用户必须 ≥ 8.3.0 |
+| TensorRT | 8.6 / 10.x | 8.5 - 10.x | 10.x 枚举名变更，需 Ultralytics ≥ 8.3.0 |
+| PyQt6 | ≥ 6.0 | 6.0 - 6.7 | — |
+| OpenCV | ≥ 4.6 | 4.6 - 4.10 | — |
+| ONNX Runtime | 1.16+ | 1.15 - 1.19 | GPU 版需与 CUDA 匹配 |
+
+### TensorRT 版本问题（重点）
+
+#### 问题：`BuilderFlag has no attribute 'FP16'`
+
+**根因**：TensorRT 10.x 将绑定拆分为 `tensorrt` + `tensorrt_bindings`，且 `BuilderFlag` 枚举从 `FP16` 改名为 `kFP16`。旧版 Ultralytics（< 8.3.0）仍使用 `BuilderFlag.FP16`，触发 `AttributeError`。
+
+**解决方案**（任选其一）：
+1. **升级 Ultralytics**（推荐）：`pip install -U ultralytics`
+2. **降级 TensorRT 到 8.x**：`pip install tensorrt==8.6.1`
+3. **本应用已内置兼容处理**：[predictor.py](yolo26_app/core/predictor.py) 在导出 engine 前自动补齐 `BuilderFlag.FP16` → `kFP16` 别名，但若 Ultralytics 内部其他位置也调用了旧枚举，仍需升级。
+
+#### TensorRT 安装注意事项
+
+```bash
+# TensorRT 10.x（需 Ultralytics ≥ 8.3.0）
+pip install tensorrt
+
+# TensorRT 8.x（兼容旧版 Ultralytics）
+pip install tensorrt==8.6.1
+```
+
+> TensorRT 版本必须与 CUDA 版本匹配。TensorRT 10.x 需要 CUDA 12.x；TensorRT 8.x 支持 CUDA 11.8/12.x。
+
+### PyTorch 与 CUDA 版本匹配
+
+#### 常见错误
+
+| 错误信息 | 原因 | 解决方案 |
+|---------|------|---------|
+| `CUDA out of memory` | 显存不足 | 减小 batch_size 或选择更小模型 |
+| `torch.cuda.is_available()` 返回 `False` | PyTorch 是 CPU 版本，或 CUDA 版本不匹配 | 重装 GPU 版 PyTorch（见[安装步骤](#4-安装-pytorchgpu-支持)） |
+| `RuntimeError: CUDA error: no kernel image` | PyTorch 编译的 CUDA 版本与驱动不匹配 | 安装与 `nvidia-smi` 显示版本匹配的 PyTorch |
+| `undefined symbol: ...` | ONNX Runtime GPU 与 CUDA 版本冲突 | 用 CPU 版：`pip uninstall onnxruntime-gpu && pip install onnxruntime` |
+
+#### 验证安装
+
+```bash
+# 验证 PyTorch + CUDA
+python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+
+# 验证 TensorRT
+python -c "import tensorrt as trt; print('TensorRT:', trt.__version__)"
+
+# 验证 Ultralytics
+python -c "import ultralytics; print('Ultralytics:', ultralytics.__version__)"
+```
+
+### ONNX Runtime 版本冲突
+
+| 场景 | 推荐安装 |
+|------|---------|
+| 仅 CPU 推理 | `pip install onnxruntime` |
+| GPU 推理（CUDA 12.x） | `pip install onnxruntime-gpu` |
+| GPU 推理（CUDA 11.8） | `pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/` |
+
+> ⚠️ **不要同时安装 `onnxruntime` 和 `onnxruntime-gpu`**，会产生冲突。如需切换，先 `pip uninstall` 其中一个。
+
+### SAM 2 安装问题
+
+```bash
+# SAM 2 需要单独安装
+pip install sam2
+
+# 如果安装失败，尝试从源码安装
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
+```
+
+SAM 2 模型权重下载后放到 `system_model/sam2/` 目录，应用会自动扫描。支持的模型：
+- `sam2.1_hiera_t.pt`（Tiny，最快）
+- `sam2.1_hiera_s.pt`（Small，推荐）
+- `sam2.1_hiera_b+.pt`（Base Plus）
+- `sam2.1_hiera_l.pt`（Large，最精准）
+
+### 系统模型目录说明
+
+应用首次启动时会自动创建 `system_model/` 目录：
+
+```
+system_model/
+├── yolo/                    # 训练预训练模型（首次训练时自动下载）
+│   ├── yolo26n.pt           # 检测
+│   ├── yolo26n-seg.pt       # 分割
+│   ├── yolo26n-cls.pt       # 分类
+│   ├── yolo26n-pose.pt      # 姿态
+│   └── ...
+├── sam2/                    # SAM2 模型（需手动下载放入）
+│   └── sam2.1_hiera_s.pt
+└── grounding_dino/          # GroundingDINO 模型（需手动下载放入）
+    └── groundingdino_swint_ogc.pth
+```
+
+> 训练预训练模型会在首次训练时由 Ultralytics 自动下载到 `system_model/yolo/`。SAM2 和 GroundingDINO 模型需手动下载后放入对应目录。
+
+---
+
 ## ❓ 常见问题
 
 ### GPU 相关
@@ -621,6 +750,14 @@ names: ['person', 'car']
 | ONNX 模型验证失败 | ONNX 格式不支持验证（val），仅 .pt 支持 | 使用 .pt 模型进行 mAP 验证 |
 | 加载 ONNX 模型后程序卡死 | ONNX Runtime 首次推理初始化耗时阻塞主线程 | 新版本已修复：图片推理改为异步执行 |
 | 导出 ONNX 后推理效果差 | 导出时缺少图优化 | 新版本已修复：自动添加 simplify=True |
+
+### TensorRT 导出相关
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| `BuilderFlag has no attribute 'FP16'` | TensorRT 10.x 枚举名改为 `kFP16`，Ultralytics 版本过低 | `pip install -U ultralytics`（≥ 8.3.0），或降级 TensorRT 到 8.x |
+| TensorRT 导出报版本不兼容 | TensorRT 与 CUDA/Ultralytics 版本不匹配 | 参见[版本兼容与环境问题](#-版本兼容与环境问题)章节 |
+| 导出 engine 后推理结果异常 | INT8 校准数据集与模型任务不匹配 | 确保校准 data.yaml 的标注类型与模型任务一致（检测/分割/关键点） |
 
 ---
 

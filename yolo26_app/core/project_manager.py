@@ -20,6 +20,7 @@ class ProjectManager:
         (project_path / "datasets").mkdir(exist_ok=True)
         (project_path / "models").mkdir(exist_ok=True)
         (project_path / "runs").mkdir(exist_ok=True)
+        (project_path / "images").mkdir(exist_ok=True)
 
         classes_file = project_path / CLASSES_FILENAME
         classes_file.touch(exist_ok=True)
@@ -93,6 +94,10 @@ class ProjectManager:
     @staticmethod
     def get_dataset_dir(config: ProjectConfig) -> Path:
         return Path(config.project_path) / "datasets"
+
+    @staticmethod
+    def get_images_dir(config: ProjectConfig) -> Path:
+        return Path(config.project_path) / "images"
 
     @staticmethod
     def get_models_dir(config: ProjectConfig) -> Path:

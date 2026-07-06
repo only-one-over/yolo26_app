@@ -35,6 +35,10 @@ wandb/
 # Datasets
 datasets/
 
+# Workspace directories (auto-created, contains user data/models)
+system_model/
+my_project/
+
 # Application runtime data
 .yolo26_app/
 

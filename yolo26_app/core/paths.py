@@ -1,0 +1,30 @@
+"""工作区路径常量与目录初始化。
+
+集中管理系统模型目录、用户项目目录等路径，避免散落在各模块中。
+"""
+from pathlib import Path
+
+# 工作区根目录（项目根目录：d:\ultralytics-main）
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# 系统模型目录（按用途分子文件夹）
+SYSTEM_MODEL_DIR = WORKSPACE_ROOT / "system_model"
+SYSTEM_MODEL_SUBDIRS = {
+    "yolo": SYSTEM_MODEL_DIR / "yolo",                  # 训练预训练模型
+    "sam2": SYSTEM_MODEL_DIR / "sam2",                  # SAM2 分割模型
+    "grounding_dino": SYSTEM_MODEL_DIR / "grounding_dino",  # GroundingDINO
+}
+
+# 用户项目根目录
+PROJECTS_ROOT = WORKSPACE_ROOT / "my_project"
+
+# 应用状态目录（沿用已有，~/.yolo26_app）
+APP_DATA_DIR = Path.home() / ".yolo26_app"
+
+
+def ensure_workspace_dirs() -> None:
+    """首次运行时创建工作区目录结构。"""
+    SYSTEM_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    for d in SYSTEM_MODEL_SUBDIRS.values():
+        d.mkdir(parents=True, exist_ok=True)
+    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)

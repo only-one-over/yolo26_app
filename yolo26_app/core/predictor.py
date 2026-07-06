@@ -7,6 +7,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+_TENSORRT_BUILDER_FLAG_ALIASES = (("FP16", "kFP16"), ("INT8", "kINT8"), ("TF32", "kTF32"))
+
 
 class YOLOPredictor:
     def __init__(self) -> None:
@@ -20,7 +22,7 @@ class YOLOPredictor:
 
     def load_model(self, path: str, task: str = "") -> bool:
         try:
-            if task and path.lower().endswith(".onnx"):
+            if task and path.lower().endswith((".onnx", ".engine")):
                 self.model = YOLO(path, task=task)
                 self._model_task = task
             else:
@@ -125,7 +127,22 @@ class YOLOPredictor:
         """
         if self.model is None:
             raise RuntimeError("模型未加载")
-        exported_path = self.model.export(format=format, **kwargs)
+        export_format = format.lower()
+        export_kwargs = self._prepare_export_kwargs(export_format, kwargs)
+        if export_format == "engine":
+            self._validate_tensorrt_environment(export_kwargs)
+
+        try:
+            exported_path = self.model.export(format=export_format, **export_kwargs)
+        except AttributeError as exc:
+            msg = str(exc)
+            if "BuilderFlag" in msg or "tensorrt_bindings" in msg:
+                raise RuntimeError(
+                    "TensorRT 导出失败：当前 ultralytics 与 TensorRT 版本不兼容"
+                    f"（{msg}）。建议升级 ultralytics（pip install -U ultralytics）"
+                    "或降级 TensorRT 至 8.x。"
+                ) from exc
+            raise
         exported_path = str(exported_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
@@ -134,11 +151,115 @@ class YOLOPredictor:
             shutil.move(exported_path, dest)
         else:
             dest = exported_path
-        # Verify ONNX models
-        if format.lower() == "onnx":
-            success, error_msg = self._verify_exported_model(dest)
+        if export_format in {"onnx", "engine"}:
+            verify_device = export_kwargs.get("device", "") if export_format == "engine" else ""
+            success, error_msg = self._verify_exported_model(
+                dest,
+                imgsz=export_kwargs.get("imgsz", 640),
+                device=str(verify_device),
+            )
             return dest, success, error_msg
         return dest, True, ""
+
+    def _prepare_export_kwargs(self, format: str, kwargs: dict) -> dict:
+        prepared = dict(kwargs)
+        if format != "engine":
+            return prepared
+
+        quantize = prepared.pop("quantize", None)
+        if quantize not in (None, 8, 16, 32):
+            raise ValueError("TensorRT quantize 仅支持 8、16、32 或不设置")
+        prepared.pop("half", None)
+        prepared.pop("int8", None)
+
+        if quantize == 8:
+            data_path = str(prepared.get("data", "")).strip()
+            if not data_path:
+                raise ValueError("TensorRT INT8 导出必须提供校准数据集 data.yaml")
+            if not os.path.isfile(data_path):
+                raise FileNotFoundError(f"TensorRT INT8 校准数据不存在: {data_path}")
+            fraction = float(prepared.get("fraction", 1.0))
+            if not 0.0 < fraction <= 1.0:
+                raise ValueError("TensorRT INT8 fraction 必须在 0.0 到 1.0 之间")
+            prepared["dynamic"] = True
+
+        if quantize in (8, 16):
+            if self._ultralytics_supports_export_arg("quantize"):
+                prepared["quantize"] = quantize
+            elif quantize == 16:
+                prepared["half"] = True
+            else:
+                prepared["int8"] = True
+                if not self._ultralytics_supports_export_arg("fraction"):
+                    prepared.pop("fraction", None)
+
+        prepared.setdefault("device", "0")
+        workspace = prepared.get("workspace")
+        if workspace is not None and float(workspace) <= 0:
+            prepared.pop("workspace")
+        return prepared
+
+    @staticmethod
+    def _ultralytics_supports_export_arg(name: str) -> bool:
+        try:
+            from ultralytics.cfg import get_cfg
+
+            return hasattr(get_cfg(), name)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _apply_tensorrt_enum_compat() -> bool:
+        """为 TensorRT 10.x 的 BuilderFlag 补齐旧式枚举别名（FP16/INT8/TF32）。
+
+        旧版 ultralytics 以 trt.BuilderFlag.FP16 方式访问，而 TensorRT 10 改用 kFP16。
+        当旧式属性缺失且存在对应 k 前缀新式成员时，补齐同名别名。全程不抛异常。
+        """
+        try:
+            import tensorrt as trt
+        except ImportError:
+            return False
+        try:
+            builder_flag = trt.BuilderFlag
+            for old_name, new_name in _TENSORRT_BUILDER_FLAG_ALIASES:
+                if hasattr(builder_flag, old_name):
+                    continue
+                if hasattr(builder_flag, new_name):
+                    setattr(builder_flag, old_name, getattr(builder_flag, new_name))
+            return True
+        except Exception:
+            return False
+
+    def _validate_tensorrt_environment(self, kwargs: dict) -> None:
+        if self.model_path and not self.model_path.lower().endswith(".pt"):
+            raise RuntimeError("TensorRT 导出需要以 .pt PyTorch 模型作为源模型")
+
+        device = str(kwargs.get("device", "0")).strip().lower()
+        if device in {"", "cpu"}:
+            raise RuntimeError("TensorRT 导出不支持 CPU，请选择 NVIDIA CUDA GPU 设备")
+
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("TensorRT 导出需要安装支持 CUDA 的 PyTorch") from exc
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "未检测到可用的 NVIDIA CUDA GPU，无法导出 TensorRT Engine。"
+                "请检查 NVIDIA 驱动、CUDA 和 PyTorch CUDA 版本。"
+            )
+
+        if device.isdigit() and int(device) >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"TensorRT 导出设备 GPU {device} 不存在，"
+                f"当前检测到 {torch.cuda.device_count()} 个 CUDA GPU"
+            )
+
+        if not self._apply_tensorrt_enum_compat():
+            raise RuntimeError(
+                "TensorRT 枚举兼容补丁应用失败，可能是 TensorRT 与 ultralytics 版本不兼容。"
+                "建议升级 ultralytics（pip install -U ultralytics）或降级 TensorRT 至 8.x。"
+            )
 
     @staticmethod
     def _unique_path(path: str) -> str:
@@ -180,8 +301,13 @@ class YOLOPredictor:
             elif "CUDA_VISIBLE_DEVICES" in os.environ:
                 del os.environ["CUDA_VISIBLE_DEVICES"]
 
-    def _verify_exported_model(self, model_path: str) -> Tuple[bool, str]:
-        """Verify exported ONNX model by running a dummy inference.
+    def _verify_exported_model(
+        self,
+        model_path: str,
+        imgsz: int = 640,
+        device: str = "",
+    ) -> Tuple[bool, str]:
+        """Verify an exported runtime model by running a dummy inference.
         
         Returns:
             Tuple of (success, error_message). If success is True, error_message is empty.
@@ -191,8 +317,15 @@ class YOLOPredictor:
             if self._model_task:
                 kwargs["task"] = self._model_task
             test_model = YOLO(model_path, **kwargs)
-            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-            test_model.predict(source=dummy, verbose=False)
+            if isinstance(imgsz, (tuple, list)):
+                height, width = int(imgsz[0]), int(imgsz[1])
+            else:
+                height = width = int(imgsz)
+            dummy = np.zeros((height, width, 3), dtype=np.uint8)
+            predict_kwargs = {"source": dummy, "imgsz": imgsz, "verbose": False}
+            if device:
+                predict_kwargs["device"] = device
+            test_model.predict(**predict_kwargs)
             return True, ""
         except Exception as e:
             return False, str(e)

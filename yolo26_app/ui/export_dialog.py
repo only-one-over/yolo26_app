@@ -12,7 +12,10 @@ FORMAT_PARAMS = {
     "onnx": {"imgsz", "half", "dynamic", "batch", "opset", "simplify", "nms"},
     "torchscript": {"imgsz", "half", "dynamic", "batch"},
     "openvino": {"imgsz", "half", "int8", "data", "dynamic", "batch"},
-    "engine": {"imgsz", "half", "int8", "data", "dynamic", "batch", "workspace"},
+    "engine": {
+        "imgsz", "precision", "data", "fraction", "device",
+        "dynamic", "batch", "workspace", "simplify", "nms",
+    },
     "coreml": {"imgsz", "half", "int8", "data", "dynamic", "batch"},
     "tflite": {"imgsz", "half", "int8", "data", "batch"},
     "ncnn": {"imgsz", "half", "batch"},
@@ -21,8 +24,31 @@ FORMAT_PARAMS = {
     "rknn": {"imgsz", "batch"},
 }
 
+FORMAT_DISPLAY_NAMES = {
+    "onnx": "ONNX (.onnx)",
+    "torchscript": "TorchScript",
+    "openvino": "OpenVINO",
+    "engine": "TensorRT (.engine)",
+    "coreml": "CoreML",
+    "tflite": "TensorFlow Lite",
+    "ncnn": "NCNN",
+    "paddle": "PaddlePaddle",
+    "mnn": "MNN",
+    "rknn": "RKNN",
+}
+
 EXPORT_PRESETS = {
     "自定义": None,
+    "TensorRT FP16": {
+        "format": "engine", "precision": 16, "imgsz": 640,
+        "dynamic": True, "batch": 1, "workspace": 0,
+        "simplify": True, "nms": False, "device": "0",
+    },
+    "TensorRT INT8": {
+        "format": "engine", "precision": 8, "imgsz": 640,
+        "dynamic": True, "batch": 8, "workspace": 4,
+        "simplify": True, "nms": False, "device": "0",
+    },
     "检测 (Detect)": {"format": "onnx", "imgsz": 640, "half": True, "dynamic": False, "simplify": True, "opset": 17, "nms": False, "batch": 1},
     "实例分割 (Segment)": {"format": "onnx", "imgsz": 640, "half": False, "dynamic": False, "simplify": False, "opset": 17, "nms": False},
     "关键点 (Pose)": {"format": "onnx", "imgsz": 640, "half": True, "dynamic": False, "simplify": True, "opset": 17},
@@ -88,8 +114,11 @@ class ExportDialog(QDialog):
         format_group = QGroupBox("导出格式")
         format_layout = QHBoxLayout(format_group)
         self._format_combo = QComboBox()
-        self._format_combo.addItems(list(FORMAT_PARAMS.keys()))
-        self._format_combo.currentTextChanged.connect(self._update_params_visibility)
+        for format_key in FORMAT_PARAMS:
+            self._format_combo.addItem(FORMAT_DISPLAY_NAMES.get(format_key, format_key), format_key)
+        self._format_combo.currentIndexChanged.connect(
+            lambda: self._update_params_visibility(self._current_format())
+        )
         format_layout.addWidget(self._format_combo)
         layout.addWidget(format_group)
 
@@ -120,6 +149,16 @@ class ExportDialog(QDialog):
         self._param_widgets["int8"] = self._int8_check
         form.addRow("", self._int8_check)
 
+        # TensorRT precision (current Ultralytics uses quantize=16/8).
+        self._precision_combo = QComboBox()
+        self._precision_combo.addItem("FP32", 32)
+        self._precision_combo.addItem("FP16", 16)
+        self._precision_combo.addItem("INT8", 8)
+        self._precision_combo.setCurrentIndex(1)
+        self._precision_combo.currentIndexChanged.connect(self._on_precision_changed)
+        self._param_widgets["precision"] = self._precision_combo
+        form.addRow("TensorRT 精度", self._precision_combo)
+
         # int8 data yaml
         self._data_layout = QHBoxLayout()
         self._data_edit = QLineEdit()
@@ -130,6 +169,14 @@ class ExportDialog(QDialog):
         self._data_layout.addWidget(self._data_btn)
         self._param_widgets["data"] = self._data_edit
         form.addRow("校准数据 (data)", self._data_layout)
+
+        self._fraction_spin = QDoubleSpinBox()
+        self._fraction_spin.setRange(0.05, 1.0)
+        self._fraction_spin.setSingleStep(0.05)
+        self._fraction_spin.setValue(1.0)
+        self._fraction_spin.setDecimals(2)
+        self._param_widgets["fraction"] = self._fraction_spin
+        form.addRow("校准比例 (fraction)", self._fraction_spin)
 
         # int8 hint label
         self._int8_hint_label = QLabel("INT8 量化需要校准数据集")
@@ -149,6 +196,11 @@ class ExportDialog(QDialog):
         self._param_widgets["batch"] = self._batch_spin
         form.addRow("Batch", self._batch_spin)
 
+        self._device_edit = QLineEdit("0")
+        self._device_edit.setPlaceholderText("例如 0、1、dla:0")
+        self._param_widgets["device"] = self._device_edit
+        form.addRow("导出设备 (device)", self._device_edit)
+
         # opset
         self._opset_spin = QSpinBox()
         self._opset_spin.setRange(9, 21)
@@ -158,8 +210,9 @@ class ExportDialog(QDialog):
 
         # workspace
         self._workspace_spin = QDoubleSpinBox()
-        self._workspace_spin.setRange(1.0, 32.0)
-        self._workspace_spin.setValue(4.0)
+        self._workspace_spin.setRange(0.0, 64.0)
+        self._workspace_spin.setValue(0.0)
+        self._workspace_spin.setSpecialValueText("自动")
         self._workspace_spin.setSuffix(" GiB")
         self._param_widgets["workspace"] = self._workspace_spin
         form.addRow("Workspace", self._workspace_spin)
@@ -174,6 +227,14 @@ class ExportDialog(QDialog):
         self._nms_check = QCheckBox("NMS (非极大值抑制)")
         self._param_widgets["nms"] = self._nms_check
         form.addRow("", self._nms_check)
+
+        self._engine_hint_label = QLabel(
+            "TensorRT 导出需要 NVIDIA CUDA GPU；生成的 .engine 与导出设备及 TensorRT 版本相关。"
+        )
+        self._engine_hint_label.setWordWrap(True)
+        self._engine_hint_label.setStyleSheet("color: #f9e2af; font-size: 12px;")
+        self._engine_hint_label.setVisible(False)
+        form.addRow("", self._engine_hint_label)
 
         scroll.setWidget(scroll_content)
         params_layout.addWidget(scroll)
@@ -191,7 +252,7 @@ class ExportDialog(QDialog):
         layout.addLayout(btn_layout)
 
         # 初始可见性
-        self._update_params_visibility(self._format_combo.currentText())
+        self._update_params_visibility(self._current_format())
 
         # 根据模型任务自动选择预设
         if task in TASK_PRESET_MAP:
@@ -202,8 +263,7 @@ class ExportDialog(QDialog):
         visible = FORMAT_PARAMS.get(fmt, set())
         for name, widget in self._param_widgets.items():
             if name == "data":
-                # data 控件：仅当 int8 在可见参数中且被勾选时才显示
-                data_visible = "int8" in visible and self._int8_check.isChecked()
+                data_visible = self._is_int8_selected(fmt)
                 self._data_edit.setVisible(data_visible)
                 self._data_btn.setVisible(data_visible)
                 # 隐藏/显示 data 行的 label
@@ -214,6 +274,14 @@ class ExportDialog(QDialog):
                         label_item.widget().setVisible(data_visible)
                 # 更新 int8 提示
                 self._update_int8_hint()
+            elif name == "fraction":
+                fraction_visible = name in visible and self._is_int8_selected(fmt)
+                widget.setVisible(fraction_visible)
+                row = self._find_form_row(name)
+                if row is not None:
+                    label_item = self._form_layout().itemAt(row, QFormLayout.ItemRole.LabelRole)
+                    if label_item and label_item.widget():
+                        label_item.widget().setVisible(fraction_visible)
             else:
                 widget.setVisible(name in visible)
                 # 同时隐藏对应的 label（QFormLayout 的 label item）
@@ -224,6 +292,14 @@ class ExportDialog(QDialog):
                         label_item.widget().setVisible(name in visible)
         # int8 hint label 的可见性跟随 data 控件
         self._update_int8_hint()
+        self._engine_hint_label.setVisible(fmt == "engine")
+        engine_int8 = fmt == "engine" and self._precision_combo.currentData() == 8
+        if engine_int8:
+            self._dynamic_check.setChecked(True)
+        self._dynamic_check.setEnabled(not engine_int8)
+        self._dynamic_check.setToolTip(
+            "TensorRT INT8 按官方要求启用动态输入尺寸" if engine_int8 else ""
+        )
 
     def _find_form_row(self, param_name: str):
         form = self._form_layout()
@@ -249,7 +325,20 @@ class ExportDialog(QDialog):
 
     def _on_int8_changed(self):
         """int8 勾选状态变化时更新 data 控件可见性"""
-        self._update_params_visibility(self._format_combo.currentText())
+        self._update_params_visibility(self._current_format())
+
+    def _on_precision_changed(self):
+        self._update_params_visibility(self._current_format())
+
+    def _current_format(self) -> str:
+        return self._format_combo.currentData() or ""
+
+    def _is_int8_selected(self, fmt: str = "") -> bool:
+        fmt = fmt or self._current_format()
+        if fmt == "engine":
+            return self._precision_combo.currentData() == 8
+        visible = FORMAT_PARAMS.get(fmt, set())
+        return "int8" in visible and self._int8_check.isChecked()
 
     def _on_browse_data(self):
         """浏览选择校准数据集 YAML 文件"""
@@ -262,13 +351,9 @@ class ExportDialog(QDialog):
 
     def _update_int8_hint(self):
         """更新 INT8 提示标签的可见性"""
-        fmt = self._format_combo.currentText()
-        visible = FORMAT_PARAMS.get(fmt, set())
-        int8_visible = "int8" in visible
-        int8_checked = self._int8_check.isChecked()
+        fmt = self._current_format()
         data_empty = not self._data_edit.text().strip()
-        # 仅当 int8 可见且被勾选，且未选择 data 文件时显示提示
-        self._int8_hint_label.setVisible(int8_visible and int8_checked and data_empty)
+        self._int8_hint_label.setVisible(self._is_int8_selected(fmt) and data_empty)
 
     # ------------------------------------------------------------------
     def _on_preset_changed(self, preset_name: str):
@@ -279,7 +364,9 @@ class ExportDialog(QDialog):
             return
         # 设置格式
         fmt = preset.get("format", "onnx")
-        self._format_combo.setCurrentText(fmt)
+        format_index = self._format_combo.findData(fmt)
+        if format_index >= 0:
+            self._format_combo.setCurrentIndex(format_index)
         # 设置各参数
         for key, value in preset.items():
             if key == "format":
@@ -289,12 +376,18 @@ class ExportDialog(QDialog):
                 continue
             if isinstance(widget, QCheckBox):
                 widget.setChecked(bool(value))
+            elif key == "precision" and isinstance(widget, QComboBox):
+                index = widget.findData(int(value))
+                if index >= 0:
+                    widget.setCurrentIndex(index)
             elif isinstance(widget, QSpinBox):
                 widget.setValue(int(value))
             elif isinstance(widget, QDoubleSpinBox):
                 widget.setValue(float(value))
             elif isinstance(widget, QComboBox):
                 widget.setCurrentText(str(value))
+            elif isinstance(widget, QLineEdit):
+                widget.setText(str(value))
         self._update_params_visibility(fmt)
 
         # Check task-preset mismatch
@@ -317,7 +410,7 @@ class ExportDialog(QDialog):
 
     # ------------------------------------------------------------------
     def _on_confirm(self):
-        fmt = self._format_combo.currentText()
+        fmt = self._current_format()
         visible = FORMAT_PARAMS.get(fmt, set())
         kwargs = {}
 
@@ -332,8 +425,20 @@ class ExportDialog(QDialog):
                 if widget.isChecked():
                     kwargs[name] = True
 
-        # int8 data: if int8 is checked, data is required
-        if "int8" in visible and self._int8_check.isChecked():
+        if fmt == "engine":
+            precision = self._precision_combo.currentData()
+            if precision in (8, 16):
+                kwargs["quantize"] = precision
+            device = self._device_edit.text().strip()
+            if not device:
+                QMessageBox.warning(self, "TensorRT 设备缺失", "请输入 NVIDIA GPU 设备，例如 0。")
+                return
+            kwargs["device"] = device
+            if precision == 8:
+                kwargs["dynamic"] = True
+
+        # INT8 calibration data is required for reproducible quantization.
+        if self._is_int8_selected(fmt):
             data_path = self._data_edit.text().strip()
             if not data_path:
                 QMessageBox.warning(
@@ -361,6 +466,8 @@ class ExportDialog(QDialog):
                 self._confirm_btn.setText("确认导出")
                 return
             kwargs["data"] = data_path
+            if "fraction" in visible:
+                kwargs["fraction"] = self._fraction_spin.value()
 
         # batch: only if > 1
         if "batch" in visible and self._batch_spin.value() > 1:
@@ -370,7 +477,9 @@ class ExportDialog(QDialog):
         if "opset" in visible:
             kwargs["opset"] = self._opset_spin.value()
         if "workspace" in visible:
-            kwargs["workspace"] = self._workspace_spin.value()
+            workspace = self._workspace_spin.value()
+            if workspace > 0:
+                kwargs["workspace"] = workspace
 
         self.export_requested.emit(fmt, kwargs)
 

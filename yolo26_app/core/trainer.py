@@ -118,6 +118,11 @@ class YOLOTrainer(QThread):
                 family_map = self.MODEL_FAMILY_TASK_MODEL_MAP.get(family, self.MODEL_FAMILY_TASK_MODEL_MAP["yolo26"])
                 model_template = family_map.get(task, family_map["detect"])
                 model_file = model_template.format(size=size)
+                # 预训练模型统一存到 system_model/yolo/，不存在时 ultralytics 自动下载
+                from yolo26_app.core.paths import SYSTEM_MODEL_SUBDIRS
+                yolo_model_dir = SYSTEM_MODEL_SUBDIRS["yolo"]
+                yolo_model_dir.mkdir(parents=True, exist_ok=True)
+                model_file = str(yolo_model_dir / model_file)
 
             self.log_signal.emit(f"加载模型: {model_file}")
             model = YOLO(model_file)
