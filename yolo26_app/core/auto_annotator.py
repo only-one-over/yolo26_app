@@ -43,13 +43,17 @@ class YOLOPreAnnotator:
                 return []
             h, w = image.shape[:2]
 
-            half = False
+            quantize = None
             try:
                 import torch
-                half = torch.cuda.is_available()
+                if torch.cuda.is_available():
+                    quantize = 16
             except ImportError:
                 pass
-            results = self._model.predict(source=image, conf=conf, verbose=False, half=half)
+            predict_kwargs = dict(source=image, conf=conf, verbose=False)
+            if quantize is not None:
+                predict_kwargs["quantize"] = quantize
+            results = self._model.predict(**predict_kwargs)
             if not results or len(results) == 0:
                 return []
 
@@ -173,6 +177,10 @@ class SAMAnnotator:
     def load_model(self, model_path: str, config_path: str, device: str = "cuda") -> bool:
         if not self._available:
             return False
+        if self._predictor is not None:
+            del self._predictor
+            import torch
+            torch.cuda.empty_cache()
         try:
             import torch
             resolved_config = self.resolve_config_path(config_path)

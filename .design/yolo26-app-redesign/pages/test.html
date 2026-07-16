@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 App — 测试 / 推理</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="app-window">
+    <!-- ============ Title Bar ============ -->
+    <div class="title-bar">
+      <div class="title-left">
+        <div class="app-mark"></div>
+        <div class="crumb">
+          <span>YOLO26 App</span>
+          <span class="sep">/</span>
+          <span class="current">测试 / 推理</span>
+        </div>
+      </div>
+      <div class="title-right">
+        <div class="status-badge">
+          <span class="dot"></span>
+          <span>模型已就绪</span>
+        </div>
+        <div class="win-ctrl">
+          <span class="min"></span>
+          <span class="max"></span>
+          <span class="close"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Main ============ -->
+    <div class="main">
+      <!-- ===== Left Panel ===== -->
+      <aside class="left-panel">
+
+        <!-- 模型设置 -->
+        <div class="config-card">
+          <div class="config-card-title">
+            <span>模型设置</span>
+            <span class="tag">.pt</span>
+          </div>
+          <div class="field-list">
+            <div class="field-row">
+              <span class="field-label">模型路径</span>
+              <div class="browse-row">
+                <div class="text-input">
+                  <span class="value">yolo26n.pt</span>
+                </div>
+                <button class="btn btn-icon" title="浏览">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="field-row inline">
+              <span class="field-label">置信度</span>
+              <div class="spin-input">
+                <input class="spin-value" value="0.25" />
+                <div class="steppers">
+                  <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 2 L9 8 L1 8 Z"/></svg></button>
+                  <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 8 L1 2 L9 2 Z"/></svg></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-row inline">
+              <span class="field-label">IoU阈值</span>
+              <div class="spin-input">
+                <input class="spin-value" value="0.7" />
+                <div class="steppers">
+                  <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 2 L9 8 L1 8 Z"/></svg></button>
+                  <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 8 L1 2 L9 2 Z"/></svg></button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapsible 高级参数 -->
+            <div class="collapsible open">
+              <div class="collapsible-header">
+                <span>高级参数</span>
+                <span class="chev"></span>
+              </div>
+              <div class="collapsible-body">
+                <div class="field-list">
+                  <div class="field-row inline">
+                    <span class="field-label">设备</span>
+                    <div class="dropdown">
+                      <span class="value">Auto (CUDA)</span>
+                      <span class="arrow"></span>
+                    </div>
+                  </div>
+                  <div class="field-row inline">
+                    <span class="field-label">图像尺寸</span>
+                    <div class="spin-input">
+                      <input class="spin-value" value="640" />
+                      <div class="steppers">
+                        <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 2 L9 8 L1 8 Z"/></svg></button>
+                        <button class="step"><svg viewBox="0 0 10 10" fill="currentColor"><path d="M5 8 L1 2 L9 2 Z"/></svg></button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="checkbox checked">
+                    <span class="box"></span>
+                    <span>半精度推理 (FP16)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button class="btn btn-primary btn-block">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>
+              </svg>
+              加载模型
+            </button>
+          </div>
+        </div>
+
+        <!-- 推理输入 -->
+        <div class="config-card">
+          <div class="config-card-title">
+            <span>推理输入</span>
+            <span class="tag">source</span>
+          </div>
+          <div class="source-grid">
+            <div class="source-btn active">
+              <span class="src-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <circle cx="9" cy="9" r="2"/>
+                  <path d="M21 15l-5-5L5 21"/>
+                </svg>
+              </span>
+              <span class="src-label">图片</span>
+            </div>
+            <div class="source-btn">
+              <span class="src-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                </svg>
+              </span>
+              <span class="src-label">目录</span>
+            </div>
+            <div class="source-btn">
+              <span class="src-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="5" width="20" height="14" rx="2"/>
+                  <path d="M10 9l5 3-5 3z"/>
+                </svg>
+              </span>
+              <span class="src-label">视频</span>
+            </div>
+            <div class="source-btn">
+              <span class="src-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 7l-7 5 7 5z"/>
+                  <rect x="1" y="5" width="15" height="14" rx="2"/>
+                </svg>
+              </span>
+              <span class="src-label">摄像头</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RealSense -->
+        <div class="config-card">
+          <div class="config-card-title">
+            <span>RealSense</span>
+            <span class="tag">D435i</span>
+          </div>
+          <div class="field-list">
+            <div class="field-row">
+              <span class="field-label">设备</span>
+              <div class="browse-row">
+                <div class="dropdown">
+                  <span class="value">设备 1 — D435i</span>
+                  <span class="arrow"></span>
+                </div>
+                <button class="btn btn-icon" title="刷新">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                    <path d="M21 3v6h-6"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="browse-row">
+              <button class="btn btn-success" style="flex:1;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="6 4 20 12 6 20 6 4"/>
+                </svg>
+                打开
+              </button>
+              <button class="btn btn-danger" style="flex:1;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="5" y="5" width="14" height="14" rx="1"/>
+                </svg>
+                停止
+              </button>
+            </div>
+
+            <div class="checkbox checked">
+              <span class="box"></span>
+              <span>显示深度</span>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- ===== Right Panel ===== -->
+      <section class="right-panel">
+
+        <!-- Result toolbar -->
+        <div class="result-toolbar">
+          <div class="result-source">
+            <span class="src-tag">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="9" cy="9" r="2"/>
+                <path d="M21 15l-5-5L5 21"/>
+              </svg>
+              图片
+            </span>
+            <span class="file-name">sample_001.jpg</span>
+          </div>
+          <div class="result-counter">
+            <span class="cur">1</span> / 24
+          </div>
+        </div>
+
+        <!-- Canvas Area -->
+        <div class="canvas-area">
+          <span class="canvas-corner tl">1280 × 720</span>
+          <span class="canvas-corner br">RGBA · 8-bit</span>
+          <div class="canvas-placeholder">
+            <div class="ph-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="9" cy="9" r="2"/>
+                <path d="M21 15l-5-5L5 21"/>
+              </svg>
+            </div>
+            <div class="ph-title">推理结果</div>
+            <div class="ph-sub">等待加载推理输入</div>
+          </div>
+        </div>
+
+        <!-- Metrics Bar -->
+        <div class="metrics-bar">
+          <div class="metrics-left">
+            <div class="stat-chip">
+              <span class="chip-label">检测数</span>
+              <span class="chip-value">12</span>
+            </div>
+            <div class="stat-chip">
+              <span class="chip-dot"></span>
+              <span class="chip-label">FPS</span>
+              <span class="chip-value">30</span>
+            </div>
+          </div>
+          <div class="metrics-right">
+            <button class="btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+              上一张
+            </button>
+            <button class="btn">
+              下一张
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+            <div class="metrics-divider"></div>
+            <button class="btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 11l3 3 8-8"/>
+                <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>
+              </svg>
+              验证
+            </button>
+            <button class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              导出
+            </button>
+          </div>
+        </div>
+
+      </section>
+    </div>
+  </div>
+
+    <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      background: var(--color-crust);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-base);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    /* ============ App Window ============ */
+    .app-window {
+      width: 1440px;
+      height: 852px;
+      background: var(--color-base);
+      border: 1px solid var(--color-crust);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg), 0 24px 60px rgba(0,0,0,0.5);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ============ Title Bar ============ */
+    .title-bar {
+      height: 44px;
+      flex: 0 0 44px;
+      background: var(--color-mantle);
+      border-bottom: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+    }
+
+    .title-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .app-mark {
+      width: 22px;
+      height: 22px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 10px rgba(137,180,250,0.35);
+    }
+
+    .app-mark::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border: 2px solid var(--color-base);
+      border-radius: 50%;
+    }
+
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--font-size-sm);
+      color: var(--color-text-muted);
+    }
+
+    .crumb .sep { color: var(--color-surface-2); }
+
+    .crumb .current {
+      color: var(--color-text);
+      font-weight: 500;
+    }
+
+    .title-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 11px;
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+    }
+
+    .status-badge .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 7px var(--color-success);
+    }
+
+    .win-ctrl {
+      display: flex;
+      gap: 8px;
+    }
+
+    .win-ctrl span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .win-ctrl .min { background: var(--color-warning); }
+    .win-ctrl .max { background: var(--color-success); }
+    .win-ctrl .close { background: var(--color-danger); }
+
+    /* ============ Main Layout ============ */
+    .main {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* ============ Left Panel ============ */
+    .left-panel {
+      width: 320px;
+      flex: 0 0 320px;
+      background: var(--color-mantle);
+      border-right: 1px solid var(--color-surface-0);
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .left-panel::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .left-panel::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .left-panel::-webkit-scrollbar-thumb {
+      background: var(--color-surface-1);
+      border-radius: 4px;
+      border: 2px solid var(--color-mantle);
+    }
+
+    .left-panel::-webkit-scrollbar-thumb:hover {
+      background: var(--color-surface-2);
+    }
+
+    /* ============ Config Card (Group Box) ============ */
+    .config-card {
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      background: var(--color-crust);
+      padding: 16px;
+    }
+
+    .config-card-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--color-text-subtle);
+      letter-spacing: 0.6px;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .config-card-title .tag {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--color-text-muted);
+      font-weight: 400;
+      letter-spacing: 0.3px;
+    }
+
+    .field-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .field-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field-row.inline {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .field-label {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-muted);
+      letter-spacing: 0.2px;
+    }
+
+    .field-row.inline .field-label {
+      width: 64px;
+      flex: 0 0 64px;
+    }
+
+    /* ============ Inputs ============ */
+    .text-input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      transition: border-color var(--transition-fast);
+      flex: 1;
+      min-width: 0;
+    }
+
+    .text-input:focus-within {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(137,180,250,0.13);
+    }
+
+    .text-input .value {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .text-input .value.muted {
+      color: var(--color-text-muted);
+    }
+
+    /* Spinner (QDoubleSpinBox style) */
+    .spin-input {
+      display: flex;
+      align-items: stretch;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      flex: 1;
+      transition: border-color var(--transition-fast);
+    }
+
+    .spin-input:focus-within {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(137,180,250,0.13);
+    }
+
+    .spin-input .spin-value {
+      flex: 1;
+      padding: 7px 10px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      background: transparent;
+      border: none;
+      outline: none;
+      min-width: 0;
+    }
+
+    .spin-input .steppers {
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--color-surface-1);
+      width: 20px;
+    }
+
+    .spin-input .step {
+      flex: 1;
+      border: none;
+      background: var(--color-surface-0);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--color-text-muted);
+      transition: background var(--transition-fast);
+    }
+
+    .spin-input .step:first-child {
+      border-bottom: 1px solid var(--color-surface-1);
+    }
+
+    .spin-input .step:hover {
+      background: var(--color-surface-1);
+      color: var(--color-text);
+    }
+
+    .spin-input .step svg {
+      width: 8px;
+      height: 8px;
+    }
+
+    /* Dropdown */
+    .dropdown {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      flex: 1;
+      min-width: 0;
+      transition: border-color var(--transition-fast);
+    }
+
+    .dropdown:hover {
+      border-color: var(--color-surface-2);
+    }
+
+    .dropdown .value {
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dropdown .arrow {
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--color-text-muted);
+      margin-left: 8px;
+      flex: 0 0 auto;
+    }
+
+    /* ============ Buttons ============ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 12px;
+      font-family: var(--font-sans);
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      line-height: 1;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn svg {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+    }
+
+    .btn-icon {
+      padding: 7px 9px;
+    }
+
+    .btn-primary {
+      background: var(--color-primary);
+      border-color: var(--color-primary-hover);
+      color: var(--color-base);
+      font-weight: 600;
+    }
+
+    .btn-primary:hover {
+      background: var(--color-primary-hover);
+    }
+
+    .btn-success {
+      background: var(--color-success);
+      border-color: var(--color-success);
+      color: var(--color-base);
+      font-weight: 600;
+    }
+
+    .btn-success:hover {
+      filter: brightness(1.08);
+    }
+
+    .btn-danger {
+      background: var(--color-danger);
+      border-color: var(--color-danger);
+      color: var(--color-base);
+      font-weight: 600;
+    }
+
+    .btn-danger:hover {
+      filter: brightness(1.08);
+    }
+
+    .btn-block {
+      width: 100%;
+      padding: 9px 12px;
+    }
+
+    /* Browse row */
+    .browse-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* ============ Collapsible ============ */
+    .collapsible {
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-md);
+      background: var(--color-mantle);
+      overflow: hidden;
+    }
+
+    .collapsible-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+      transition: background var(--transition-fast);
+    }
+
+    .collapsible-header:hover {
+      background: var(--color-surface-0);
+    }
+
+    .collapsible-header .chev {
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--color-text-muted);
+      transition: transform var(--transition-fast);
+    }
+
+    .collapsible.open .chev {
+      transform: rotate(180deg);
+    }
+
+    .collapsible-body {
+      display: none;
+      padding: 12px;
+      border-top: 1px solid var(--color-surface-0);
+    }
+
+    .collapsible.open .collapsible-body {
+      display: block;
+    }
+
+    .collapsible-body .field-list {
+      gap: 10px;
+    }
+
+    /* ============ Source Grid (2x2) ============ */
+    .source-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .source-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px 8px;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      color: var(--color-text-subtle);
+    }
+
+    .source-btn:hover {
+      border-color: var(--color-surface-2);
+      color: var(--color-text);
+    }
+
+    .source-btn .src-icon {
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--color-text-muted);
+      transition: color var(--transition-fast);
+    }
+
+    .source-btn:hover .src-icon {
+      color: var(--color-primary);
+    }
+
+    .source-btn .src-label {
+      font-size: var(--font-size-sm);
+      font-weight: 500;
+    }
+
+    .source-btn.active {
+      background: rgba(137,180,250,0.12);
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+
+    .source-btn.active .src-icon {
+      color: var(--color-primary);
+    }
+
+    .source-btn svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    /* ============ Checkbox ============ */
+    .checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .checkbox .box {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--color-surface-2);
+      border-radius: var(--radius-sm);
+      background: var(--color-crust);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-fast);
+      flex: 0 0 16px;
+    }
+
+    .checkbox.checked .box {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+
+    .checkbox.checked .box::after {
+      content: "";
+      width: 4px;
+      height: 8px;
+      border: solid var(--color-base);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg) translate(-1px, -1px);
+    }
+
+    /* ============ Right Panel ============ */
+    .right-panel {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      gap: 14px;
+    }
+
+    .result-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: 0 0 auto;
+    }
+
+    .result-source {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+    }
+
+    .result-source .src-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      background: var(--color-surface-0);
+      border-radius: var(--radius-sm);
+      font-size: var(--font-size-xs);
+      color: var(--color-primary);
+      font-weight: 500;
+    }
+
+    .result-source .file-name {
+      font-family: var(--font-mono);
+      color: var(--color-text);
+    }
+
+    .result-counter {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-muted);
+    }
+
+    .result-counter .cur {
+      color: var(--color-text);
+      font-weight: 600;
+    }
+
+    /* Canvas Area */
+    .canvas-area {
+      flex: 1;
+      min-height: 0;
+      background: var(--color-crust);
+      border: 1.5px dashed var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .canvas-area::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--color-surface-0) 1px, transparent 1px),
+        linear-gradient(90deg, var(--color-surface-0) 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.18;
+    }
+
+    .canvas-placeholder {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      z-index: 1;
+    }
+
+    .canvas-placeholder .ph-icon {
+      width: 64px;
+      height: 64px;
+      border: 2px solid var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--color-text-muted);
+      background: var(--color-mantle);
+    }
+
+    .canvas-placeholder .ph-icon svg {
+      width: 32px;
+      height: 32px;
+    }
+
+    .canvas-placeholder .ph-title {
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      color: var(--color-text-subtle);
+      letter-spacing: 1px;
+    }
+
+    .canvas-placeholder .ph-sub {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-muted);
+    }
+
+    .canvas-corner {
+      position: absolute;
+      z-index: 1;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      padding: 4px 8px;
+    }
+
+    .canvas-corner.tl { top: 10px; left: 12px; }
+    .canvas-corner.br { bottom: 10px; right: 12px; }
+
+    /* ============ Metrics Bar ============ */
+    .metrics-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+    }
+
+    .metrics-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stat-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+    }
+
+    .stat-chip .chip-label {
+      color: var(--color-text-muted);
+    }
+
+    .stat-chip .chip-value {
+      color: var(--color-text);
+      font-weight: 600;
+    }
+
+    .stat-chip .chip-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 6px var(--color-success);
+    }
+
+    .metrics-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .metrics-divider {
+      width: 1px;
+      height: 22px;
+      background: var(--color-surface-1);
+      margin: 0 4px;
+    }
+  </style>
+</body>
+</html>

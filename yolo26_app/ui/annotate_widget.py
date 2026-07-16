@@ -5,6 +5,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
 from PyQt6.QtGui import (
     QPixmap,
@@ -29,6 +31,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QFileDialog,
+    QFrame,
     QInputDialog,
     QMessageBox,
     QLabel,
@@ -49,6 +52,10 @@ from yolo26_app.core.label_manager import LabelManager
 from yolo26_app.core.persistence import write_json_atomic
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui import styles
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"}
 
 
 class _FlipIdxDialog(QDialog):
@@ -266,6 +273,24 @@ class _BatchDetectWorker(QThread):
         self._stop_flag = True
 
 
+class _DinoWorker(QThread):
+    done_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, dino, image_path, text):
+        super().__init__()
+        self._dino = dino
+        self._image_path = image_path
+        self._text = text
+
+    def run(self):
+        try:
+            annotations = self._dino.detect(self._image_path, self._text)
+            self.done_signal.emit(annotations)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class _ThumbnailWorker(QThread):
     thumbnail_ready = pyqtSignal(int, QPixmap)
 
@@ -275,9 +300,9 @@ class _ThumbnailWorker(QThread):
         self._stop_flag = False
 
     def stop(self) -> None:
+        # 仅设置停止标志，不调用 quit()（对自定义 run() 无事件循环无效）。
+        # 等待逻辑交由调用方统一处理，避免 wait 超时后线程仍在运行。
         self._stop_flag = True
-        self.quit()
-        self.wait(3000)
 
     def run(self) -> None:
         for row, path in self._items:
@@ -307,11 +332,13 @@ class AnnotateWidget(QWidget):
         self._sam_worker = None
         self._batch_worker = None
         self._batch_progress = None
+        self._dino_worker = None
         self._thumb_worker: Optional[_ThumbnailWorker] = None
+        self._current_pixmap_item = None
         self._download_worker = None
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(0)
+        self._autosave_timer.setInterval(1500)
         self._autosave_timer.timeout.connect(self._save_annotations_to_project)
 
         self._setup_ui()
@@ -339,10 +366,15 @@ class AnnotateWidget(QWidget):
         if self._sam_annotator is None or self._sam_annotator._predictor is None:
             return
         if self._sam_worker is not None and self._sam_worker.isRunning():
-            self._sam_worker.quit()
-            self._sam_worker.wait()
+            self._sam_worker.wait(5000)
+            if self._sam_worker.isRunning():
+                try:
+                    self._sam_worker.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                print("警告: SAM encode worker 5 秒内未退出,已断开信号连接")
         import cv2
-        image = cv2.imread(image_path)
+        image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             return
         self._sam_encoding = True
@@ -372,8 +404,13 @@ class AnnotateWidget(QWidget):
         if hasattr(window, "statusbar"):
             window.statusbar.showMessage("SAM 2 正在预测...")
         if self._sam_worker is not None and self._sam_worker.isRunning():
-            self._sam_worker.quit()
-            self._sam_worker.wait()
+            self._sam_worker.wait(5000)
+            if self._sam_worker.isRunning():
+                try:
+                    self._sam_worker.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                print("警告: SAM predict worker 5 秒内未退出,已断开信号连接")
         self._sam_worker = _SamWorker(
             self._sam_annotator._predictor,
             task="predict",
@@ -408,58 +445,118 @@ class AnnotateWidget(QWidget):
         if hasattr(window, "statusbar"):
             window.statusbar.showMessage(f"SAM 2 错误: {error_msg}")
 
+    def _create_toolbar_separator(self) -> QFrame:
+        """Create a vertical separator for toolbar grouping."""
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFixedWidth(1)
+        sep.setObjectName("navSeparator")
+        return sep
+
+    def _load_icon(self, name: str) -> QIcon:
+        """Load an SVG icon from the ui/icons directory by name."""
+        icon_path = os.path.join(os.path.dirname(__file__), "icons", f"{name}.svg")
+        if os.path.exists(icon_path):
+            return QIcon(icon_path)
+        return QIcon()
+
     def _setup_ui(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(8, 8, 8, 8)
 
-        self._toolbar = QScrollArea()
-        self._toolbar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._toolbar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._toolbar.setWidgetResizable(False)
-        self._toolbar.setMinimumHeight(50)
-        self._toolbar.setMaximumHeight(80)
+        self._toolbar = QFrame()
+        self._toolbar.setObjectName("annotateToolbar")
+        self._toolbar.setFixedHeight(48)
+        toolbar_layout = QHBoxLayout(self._toolbar)
+        toolbar_layout.setContentsMargins(8, 4, 8, 4)
+        toolbar_layout.setSpacing(6)
 
-        toolbar_container = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar_container)
-        toolbar_layout.setContentsMargins(8, 8, 8, 8)
-        toolbar_layout.setSpacing(8)
+        icon_size = QSize(16, 16)
 
+        # --- Group 1: 标注工具 ---
         self._btn_rect = QPushButton("矩形标注")
         self._btn_rect.setCheckable(True)
         self._btn_rect.setChecked(True)
+        self._btn_rect.setIcon(self._load_icon("tool-rect"))
+        self._btn_rect.setIconSize(icon_size)
         self._btn_polygon = QPushButton("多边形标注")
         self._btn_polygon.setCheckable(True)
+        self._btn_polygon.setIcon(self._load_icon("tool-polygon"))
+        self._btn_polygon.setIconSize(icon_size)
         self._btn_keypoint = QPushButton("关键点")
         self._btn_keypoint.setCheckable(True)
         self._btn_keypoint.setToolTip("关键点标注工具")
+        self._btn_keypoint.setIcon(self._load_icon("tool-keypoint"))
+        self._btn_keypoint.setIconSize(icon_size)
         self._btn_select = QPushButton("选择")
         self._btn_select.setCheckable(True)
-        self._btn_delete = QPushButton("删除")
-        self._btn_sam = QPushButton("SAM分割")
-        self._btn_dino = QPushButton("文本检测")
-        self._btn_batch = QPushButton("逐帧检测")
-        self._btn_import_img = QPushButton("导入图片")
-        self._btn_import_video = QPushButton("导入视频")
-        self._btn_import_dir = QPushButton("导入目录")
-        self._btn_export = QPushButton("导出数据集")
-
+        self._btn_select.setIcon(self._load_icon("tool-select"))
+        self._btn_select.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_rect)
         toolbar_layout.addWidget(self._btn_polygon)
         toolbar_layout.addWidget(self._btn_keypoint)
         toolbar_layout.addWidget(self._btn_select)
-        toolbar_layout.addSpacing(8)
+
+        toolbar_layout.addWidget(self._create_toolbar_separator())
+
+        # --- Group 2: 编辑操作 ---
+        self._btn_delete = QPushButton("删除")
+        self._btn_delete.setIcon(self._load_icon("tool-delete"))
+        self._btn_delete.setIconSize(icon_size)
+        self._btn_clear_annotations = QPushButton("清空标注")
+        self._btn_clear_annotations.setToolTip("清除当前画布的所有标注，保留图片本身")
+        self._btn_clear_annotations.setIcon(self._load_icon("tool-clear"))
+        self._btn_clear_annotations.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_delete)
-        toolbar_layout.addSpacing(8)
+        toolbar_layout.addWidget(self._btn_clear_annotations)
+
+        toolbar_layout.addWidget(self._create_toolbar_separator())
+
+        # --- Group 3: AI辅助 ---
+        self._btn_sam = QPushButton("SAM分割")
+        self._btn_sam.setIcon(self._load_icon("tool-sam"))
+        self._btn_sam.setIconSize(icon_size)
+        self._btn_dino = QPushButton("文本检测")
+        self._btn_dino.setIcon(self._load_icon("tool-dino"))
+        self._btn_dino.setIconSize(icon_size)
+        self._btn_batch = QPushButton("逐帧检测")
+        self._btn_batch.setIcon(self._load_icon("tool-batch"))
+        self._btn_batch.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_sam)
         toolbar_layout.addWidget(self._btn_dino)
         toolbar_layout.addWidget(self._btn_batch)
+
+        toolbar_layout.addWidget(self._create_toolbar_separator())
+
+        # --- Group 4: 数据导入 ---
+        self._btn_import_img = QPushButton("导入图片")
+        self._btn_import_img.setIcon(self._load_icon("tool-import-image"))
+        self._btn_import_img.setIconSize(icon_size)
+        self._btn_import_video = QPushButton("导入视频")
+        self._btn_import_video.setIcon(self._load_icon("tool-import-video"))
+        self._btn_import_video.setIconSize(icon_size)
+        self._btn_import_dir = QPushButton("导入目录")
+        self._btn_import_dir.setIcon(self._load_icon("tool-import-dir"))
+        self._btn_import_dir.setIconSize(icon_size)
+        self._btn_clear_images = QPushButton("清空图片")
+        self._btn_clear_images.setToolTip("清空当前标注区的图片列表和对应标注，不删除磁盘文件")
+        self._btn_clear_images.setIcon(self._load_icon("tool-clear"))
+        self._btn_clear_images.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_import_img)
         toolbar_layout.addWidget(self._btn_import_video)
         toolbar_layout.addWidget(self._btn_import_dir)
-        toolbar_layout.addSpacing(8)
+        toolbar_layout.addWidget(self._btn_clear_images)
+
+        toolbar_layout.addWidget(self._create_toolbar_separator())
+
+        # --- Group 5: 导出 ---
+        self._btn_export = QPushButton("导出数据集")
+        self._btn_export.setIcon(self._load_icon("tool-export"))
+        self._btn_export.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_export)
 
-        self._toolbar.setWidget(toolbar_container)
+        toolbar_layout.addStretch()
+        self._toolbar.setStyleSheet(styles.TOOLBAR_BUTTON_STYLE)
 
         main_layout.addWidget(self._toolbar)
 
@@ -478,9 +575,13 @@ class AnnotateWidget(QWidget):
         class_layout.addWidget(self._class_list_widget)
 
         btn_row = QHBoxLayout()
-        self._btn_add_class = QPushButton("+")
+        self._btn_add_class = QPushButton()
+        self._btn_add_class.setIcon(self._load_icon("action-add"))
+        self._btn_add_class.setIconSize(QSize(14, 14))
         self._btn_add_class.setMinimumWidth(40)
-        self._btn_remove_class = QPushButton("-")
+        self._btn_remove_class = QPushButton()
+        self._btn_remove_class.setIcon(self._load_icon("action-remove"))
+        self._btn_remove_class.setIconSize(QSize(14, 14))
         self._btn_remove_class.setMinimumWidth(40)
         btn_row.addWidget(self._btn_add_class)
         btn_row.addWidget(self._btn_remove_class)
@@ -496,7 +597,9 @@ class AnnotateWidget(QWidget):
 
         self._splitter.addWidget(left_splitter)
         self._splitter.addWidget(self._view)
-        self._splitter.setSizes([250, 750])
+        self._splitter.setSizes([280, 720])
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
 
         main_layout.addWidget(self._splitter)
         self.setLayout(main_layout)
@@ -507,12 +610,14 @@ class AnnotateWidget(QWidget):
         self._btn_keypoint.clicked.connect(lambda: self._set_tool("keypoint"))
         self._btn_select.clicked.connect(lambda: self._set_tool("select"))
         self._btn_delete.clicked.connect(self._delete_selected)
+        self._btn_clear_annotations.clicked.connect(self._clear_current_annotations)
         self._btn_sam.clicked.connect(self._sam_annotate)
         self._btn_dino.clicked.connect(self._text_detect)
         self._btn_batch.clicked.connect(self._batch_detect)
         self._btn_import_img.clicked.connect(self._import_images)
         self._btn_import_video.clicked.connect(self._import_video)
         self._btn_import_dir.clicked.connect(self._import_directory)
+        self._btn_clear_images.clicked.connect(self._clear_imported_images)
         self._btn_export.clicked.connect(self._export_dataset)
         self._image_list_widget.currentItemChanged.connect(self._on_image_selected)
         self._btn_add_class.clicked.connect(self._add_class)
@@ -537,6 +642,37 @@ class AnnotateWidget(QWidget):
         self._autosave_timer.stop()
         self._save_current_annotations()
         self._save_annotations_to_project()
+
+    def stop_background_threads(self) -> None:
+        """停止所有后台线程（缩略图、SAM、批量检测等），用于窗口关闭前清理。"""
+        self._stop_thumb_worker()
+        if self._sam_worker is not None:
+            try:
+                if self._sam_worker.isRunning():
+                    self._sam_worker.wait(5000)
+                    if self._sam_worker.isRunning():
+                        try:
+                            self._sam_worker.disconnect()
+                        except (RuntimeError, TypeError):
+                            pass
+                        print("警告: SAM worker 5 秒内未退出,已断开信号连接")
+            except RuntimeError:
+                pass
+            self._sam_worker = None
+        if self._batch_worker is not None:
+            try:
+                self._batch_worker.stop()
+                if self._batch_worker.isRunning():
+                    self._batch_worker.wait(5000)
+                    if self._batch_worker.isRunning():
+                        try:
+                            self._batch_worker.disconnect()
+                        except (RuntimeError, TypeError):
+                            pass
+                        print("警告: 批量检测 worker 5 秒内未退出,已断开信号连接")
+            except RuntimeError:
+                pass
+            self._batch_worker = None
 
     def _go_to_next_image(self) -> None:
         if QApplication.activeModalWidget() is not None:
@@ -586,6 +722,28 @@ class AnnotateWidget(QWidget):
         self._scene.delete_selected()
         self._save_current_annotations()
 
+    def _clear_current_annotations(self) -> None:
+        if not self._current_image_path:
+            QMessageBox.information(self, "提示", "当前没有选中的图片")
+            return
+        if not self._scene.get_annotations():
+            QMessageBox.information(self, "提示", "当前画布没有可清除的标注")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认清空标注",
+            "将清除当前画布的所有标注（保留图片本身）。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._scene.clear_annotations()
+        self._annotations_dict[self._current_image_path] = []
+        self._schedule_autosave()
+
     def _copy_to_project_images(self, src_path: str) -> str:
         """将素材复制到项目 images/ 目录，返回相对项目路径的路径。
 
@@ -606,12 +764,12 @@ class AnnotateWidget(QWidget):
         except ValueError:
             rel = src_path
         if os.path.isfile(os.path.join(project_path, rel)) and src_path == os.path.join(project_path, rel):
-            return rel.replace(os.sep, "/")
+            return os.path.join(project_path, rel)
 
         # 复制到 images/，重名加序号
         dest = images_dir / src.name
         if dest.resolve() == src.resolve():
-            return os.path.relpath(str(dest), project_path).replace(os.sep, "/")
+            return str(dest.resolve())
         counter = 1
         stem, suffix = src.stem, src.suffix
         while dest.exists():
@@ -619,82 +777,216 @@ class AnnotateWidget(QWidget):
             counter += 1
         import shutil
         shutil.copy2(str(src), str(dest))
-        return os.path.relpath(str(dest), project_path).replace(os.sep, "/")
+        return str(dest.resolve())
 
     def _import_images(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
-            self, "导入图片", "", "Images (*.jpg *.jpeg *.png *.bmp)"
+            self,
+            "导入图片",
+            self._get_import_start_dir(),
+            "Images (*.jpg *.jpeg *.png *.bmp *.tif *.tiff *.webp)",
         )
         if not files:
             return
-        for f in files:
-            stored = self._copy_to_project_images(f)
-            if stored not in self._image_list:
-                self._image_list.append(stored)
-                self._annotations_dict.setdefault(stored, [])
-                self._add_image_item(stored)
-        self._start_thumbnail_loading()
-        self._schedule_autosave()
+        added = self._import_image_files(files)
+        if added:
+            self._finish_media_import()
 
     def _import_directory(self) -> None:
-        dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
+        dir_path = QFileDialog.getExistingDirectory(self, "选择媒体目录", self._get_import_start_dir())
         if not dir_path:
             return
-        extensions = {".jpg", ".jpeg", ".png", ".bmp"}
-        image_files: List[str] = []
-        for root, dirs, files in os.walk(dir_path):
-            for f in files:
-                if os.path.splitext(f)[1].lower() in extensions:
-                    image_files.append(os.path.join(root, f))
-        image_files.sort()
-        if not image_files:
-            QMessageBox.warning(self, "提示", "所选目录中没有找到图片文件")
+
+        image_files, video_files = self._scan_media_directory(dir_path)
+        if not image_files and not video_files:
+            QMessageBox.warning(self, "提示", "目录中未找到支持的图片或视频文件")
             return
-        for path in image_files:
-            stored = self._copy_to_project_images(path)
-            if stored not in self._image_list:
-                self._image_list.append(stored)
-                self._annotations_dict.setdefault(stored, [])
-                self._add_image_item(stored)
-        self._start_thumbnail_loading()
-        self._image_list_widget.setCurrentRow(0)
-        self._schedule_autosave()
+
+        added_images = self._import_image_files(image_files)
+        imported_videos, extracted_frames, failed_videos = self._import_video_files(video_files)
+        if added_images or extracted_frames:
+            self._finish_media_import(select_first_if_empty=True)
+
+        summary = f"图片 {added_images} 张，视频 {imported_videos} 个，抽帧 {extracted_frames} 张"
+        if failed_videos:
+            summary += "\n以下视频无法打开或没有有效帧，已跳过：\n" + "\n".join(failed_videos[:10])
+            if len(failed_videos) > 10:
+                summary += f"\n... 另有 {len(failed_videos) - 10} 个"
+            QMessageBox.warning(self, "导入完成", summary)
+        else:
+            QMessageBox.information(self, "导入完成", summary)
 
     def _import_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入视频", "", "Videos (*.mp4 *.avi *.mkv *.mov)"
+            self, "导入视频", self._get_import_start_dir(), "Videos (*.mp4 *.avi *.mkv *.mov *.wmv *.flv)"
         )
         if not path:
             return
+
+        _imported_videos, extracted_frames, failed_videos = self._import_video_files([path])
+        if extracted_frames:
+            self._finish_media_import()
+        if failed_videos:
+            QMessageBox.warning(
+                self,
+                "导入视频失败",
+                "视频无法打开或没有有效帧，已跳过：\n" + "\n".join(failed_videos),
+            )
+
+    def _scan_media_directory(self, dir_path: str) -> tuple[List[str], List[str]]:
+        image_files: List[str] = []
+        video_files: List[str] = []
+        for root, dirs, files in os.walk(dir_path):
+            dirs.sort()
+            for filename in sorted(files):
+                path = os.path.join(root, filename)
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in IMAGE_EXTENSIONS:
+                    image_files.append(path)
+                elif ext in VIDEO_EXTENSIONS:
+                    video_files.append(path)
+        image_files.sort(key=str.lower)
+        video_files.sort(key=str.lower)
+        return image_files, video_files
+
+    def _import_image_files(self, paths: List[str]) -> int:
+        added = 0
+        total = len(paths)
+        show_progress = total > 50
+        if show_progress:
+            progress = QProgressDialog(f"正在导入 0/{total}...", "取消", 0, total, self)
+            progress.setWindowTitle("导入图片")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+        for i, path in enumerate(paths):
+            if path and os.path.isfile(path):
+                stored = self._copy_to_project_images(path)
+                if self._add_imported_image(stored):
+                    added += 1
+            if show_progress:
+                progress.setValue(i + 1)
+                progress.setLabelText(f"正在导入 {i + 1}/{total}...")
+                if progress.wasCanceled():
+                    break
+        if show_progress:
+            progress.setValue(total)
+        return added
+
+    def _import_video_files(self, paths: List[str]) -> tuple[int, int, List[str]]:
+        imported_videos = 0
+        extracted_frames = 0
+        failed_videos: List[str] = []
+
+        for path in paths:
+            if not path or not os.path.isfile(path):
+                failed_videos.append(os.path.basename(path) if path else "未知视频")
+                continue
+            try:
+                frame_paths = self._extract_video_frames(path)
+            except Exception as exc:
+                failed_videos.append(f"{os.path.basename(path)}: {exc}")
+                continue
+
+            added_for_video = 0
+            for stored in frame_paths:
+                if self._add_imported_image(stored):
+                    added_for_video += 1
+            if added_for_video:
+                imported_videos += 1
+                extracted_frames += added_for_video
+            else:
+                failed_videos.append(os.path.basename(path))
+
+        return imported_videos, extracted_frames, failed_videos
+
+    def _extract_video_frames(self, video_path: str) -> List[str]:
         import cv2
-        window = self.window()
-        if hasattr(window, "current_project_config") and window.current_project_config is not None:
-            temp_dir = str(ProjectManager.get_images_dir(window.current_project_config))
-            os.makedirs(temp_dir, exist_ok=True)
-        else:
-            temp_dir = tempfile.mkdtemp(prefix="yolo26_frames_")
-        cap = cv2.VideoCapture(path)
+
+        output_dir = self._get_video_frame_output_dir()
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            cap.release()
+            return []
+
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30.0
         interval = max(1, int(fps))
         frame_idx = 0
         saved_idx = 0
+        stored_paths: List[str] = []
+        has_project = self._current_project_config() is not None
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             if frame_idx % interval == 0:
-                out_path = os.path.join(temp_dir, f"frame_{saved_idx:06d}.jpg")
-                cv2.imwrite(out_path, frame)
-                stored = self._copy_to_project_images(out_path) if (hasattr(window, "current_project_config") and window.current_project_config is not None) else out_path
-                self._image_list.append(stored)
-                self._annotations_dict.setdefault(stored, [])
-                self._add_image_item(stored)
-                saved_idx += 1
+                out_path = self._next_video_frame_path(output_dir, video_path, saved_idx)
+                ok, buf = cv2.imencode(".jpg", frame)
+                if ok:
+                    buf.tofile(str(out_path))
+                    stored = self._copy_to_project_images(str(out_path)) if has_project else str(out_path)
+                    stored_paths.append(stored)
+                    saved_idx += 1
             frame_idx += 1
+
         cap.release()
+        return stored_paths
+
+    def _current_project_config(self) -> Optional[ProjectConfig]:
+        window = self.window()
+        if hasattr(window, "current_project_config"):
+            return window.current_project_config
+        return None
+
+    def _get_import_start_dir(self) -> str:
+        """返回导入对话框的起始目录。
+
+        优先使用当前工作区间的 images/ 目录(若已存在),
+        否则回退到 project_path,再否则回退到用户主目录。
+        """
+        config = self._current_project_config()
+        if config is not None:
+            images_dir = ProjectManager.get_images_dir(config)
+            if images_dir.is_dir():
+                return str(images_dir)
+            if Path(config.project_path).is_dir():
+                return str(config.project_path)
+        return str(Path.home())
+
+    def _get_video_frame_output_dir(self) -> Path:
+        config = self._current_project_config()
+        if config is not None:
+            output_dir = ProjectManager.get_images_dir(config)
+        else:
+            output_dir = Path(tempfile.mkdtemp(prefix="yolo26_frames_"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _next_video_frame_path(self, output_dir: Path, video_path: str, frame_index: int) -> Path:
+        stem = Path(video_path).stem
+        safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in stem).strip("._")
+        if not safe_stem:
+            safe_stem = "video"
+        candidate = output_dir / f"{safe_stem}_frame_{frame_index:06d}.jpg"
+        counter = 1
+        while candidate.exists():
+            candidate = output_dir / f"{safe_stem}_frame_{frame_index:06d}_{counter}.jpg"
+            counter += 1
+        return candidate
+
+    def _add_imported_image(self, image_path: str) -> bool:
+        if image_path in self._image_list:
+            return False
+        self._image_list.append(image_path)
+        self._annotations_dict.setdefault(image_path, [])
+        self._add_image_item(image_path)
+        return True
+
+    def _finish_media_import(self, select_first_if_empty: bool = False) -> None:
         self._start_thumbnail_loading()
+        if select_first_if_empty and self._image_list_widget.currentRow() < 0 and self._image_list_widget.count() > 0:
+            self._image_list_widget.setCurrentRow(0)
         self._schedule_autosave()
 
     def _add_image_item(self, image_path: str) -> None:
@@ -703,23 +995,48 @@ class AnnotateWidget(QWidget):
         item.setToolTip(image_path)
         self._image_list_widget.addItem(item)
 
+    def _stop_thumb_worker(self) -> None:
+        """停止当前缩略图 worker 并完整等待其退出。
+
+        多图场景下旧 worker 可能仍在处理大图，必须等待 run() 自然退出，
+        否则后续覆盖引用会导致 QThread 被提前销毁。
+        """
+        worker = self._thumb_worker
+        self._thumb_worker = None
+        if worker is None:
+            return
+        try:
+            worker.stop()
+            if worker.isRunning():
+                # 完整等待，避免超时返回后线程仍在运行
+                worker.wait(10000)
+        except RuntimeError:
+            pass
+
     def _start_thumbnail_loading(self) -> None:
         items = []
         for row in range(self._image_list_widget.count()):
             item = self._image_list_widget.item(row)
             path = item.data(Qt.ItemDataRole.UserRole)
             items.append((row, path))
-        if items:
-            if hasattr(self, '_thumb_worker') and self._thumb_worker is not None:
-                try:
-                    self._thumb_worker.stop()
-                except RuntimeError:
-                    pass
-            self._thumb_worker = _ThumbnailWorker(items, self)
-            self._thumb_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
-            self._thumb_worker.finished.connect(self._thumb_worker.deleteLater)
-            self._thumb_worker.finished.connect(lambda: setattr(self, '_thumb_worker', None))
-            self._thumb_worker.start()
+        if not items:
+            self._stop_thumb_worker()
+            return
+
+        # 先完整停止旧 worker，避免多个线程并发运行
+        self._stop_thumb_worker()
+
+        # parent=None，避免 widget 销毁时 Qt 自动销毁仍在运行的线程
+        worker = _ThumbnailWorker(items, None)
+        worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        worker.finished.connect(worker.deleteLater)
+        # 用局部变量比较，避免旧 worker 的 finished 误清新 worker 引用
+        def _on_finished(_w=worker):
+            if self._thumb_worker is _w:
+                self._thumb_worker = None
+        worker.finished.connect(_on_finished)
+        self._thumb_worker = worker
+        worker.start()
 
     def _on_thumbnail_ready(self, row: int, pixmap: QPixmap) -> None:
         if 0 <= row < self._image_list_widget.count():
@@ -741,12 +1058,14 @@ class AnnotateWidget(QWidget):
 
     def _load_image(self, image_path: str) -> None:
         self._scene.clear_annotations()
+        # clear_annotations 已移除旧 pixmap item，重置引用避免悬空
+        self._current_pixmap_item = None
         pixmap = QPixmap(image_path)
         if pixmap.isNull():
             return
-        from PyQt6.QtWidgets import QGraphicsPixmapItem
-        from PyQt6.QtGui import QPixmap as QPxm
-        img_item = self._scene.addPixmap(pixmap)
+        if self._current_pixmap_item is not None:
+            self._scene.removeItem(self._current_pixmap_item)
+        self._current_pixmap_item = self._scene.addPixmap(pixmap)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
 
         anns = self._annotations_dict.get(image_path, [])
@@ -778,6 +1097,35 @@ class AnnotateWidget(QWidget):
                 self._scene.set_tool("select")
                 return
         super().keyPressEvent(event)
+
+    def _clear_imported_images(self) -> None:
+        if not self._image_list:
+            QMessageBox.information(self, "提示", "当前标注区没有可清空的图片")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认清空",
+            "将清空当前标注区的所有图片和对应标注记录。\n不会删除磁盘上的图片文件。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if self._thumb_worker is not None:
+            self._stop_thumb_worker()
+
+        self._save_current_annotations()
+        self._image_list.clear()
+        self._annotations_dict.clear()
+        self._current_image_path = ""
+        self._image_list_widget.clear()
+        self._scene.clear_annotations()
+        self._current_pixmap_item = None
+        self._scene.clear()
+        self._scene.setSceneRect(QRectF())
+        self._schedule_autosave()
 
     def _add_class(self) -> None:
         dialog = QDialog(self)
@@ -824,7 +1172,13 @@ class AnnotateWidget(QWidget):
         classes = self._label_manager.get_all_classes()
         for cls_item in classes:
             pixmap = QPixmap(16, 16)
-            pixmap.fill(QColor(cls_item.color))
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QBrush(QColor(cls_item.color)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(1, 1, 14, 14)
+            painter.end()
             label = cls_item.name + (f" ({cls_item.kpt_count}pt)" if cls_item.kpt_count > 0 else "")
             item = QListWidgetItem(QIcon(pixmap), label)
             self._class_list_widget.addItem(item)
@@ -876,6 +1230,9 @@ class AnnotateWidget(QWidget):
                 model_info = sam.scan_model_file(d)
                 if model_info:
                     break
+            # device 需在创建下载 worker 之前计算，确保下载完成回调 lambda 可引用
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
             if model_info:
                 model_path, model_type, config_path = model_info
             else:
@@ -920,8 +1277,6 @@ class AnnotateWidget(QWidget):
                 elif "hiera_t" in filename or "hiera-tiny" in filename:
                     config_path = "configs/sam2.1/sam2.1_hiera_t.yaml"
                     model_type = "sam2.1_hiera_t"
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
             window = self.window()
             if hasattr(window, "statusbar"):
                 window.statusbar.showMessage("SAM 2 正在加载模型...")
@@ -1003,15 +1358,27 @@ class AnnotateWidget(QWidget):
         )
         if not ok or not text.strip():
             return
-        annotations = dino.detect(self._current_image_path, text.strip())
+        self._dino_worker = _DinoWorker(dino, self._current_image_path, text.strip())
+        self._dino_worker.done_signal.connect(self._on_dino_done)
+        self._dino_worker.error_signal.connect(
+            lambda msg: QMessageBox.warning(self, "检测失败", msg)
+        )
+        self._dino_worker.finished.connect(self._dino_worker.deleteLater)
+        self._dino_worker.finished.connect(lambda: setattr(self, '_dino_worker', None))
+        window = self.window()
+        if hasattr(window, "statusbar"):
+            window.statusbar.showMessage("正在检测...")
+        self._dino_worker.start()
+
+    def _on_dino_done(self, annotations) -> None:
+        self._scene.load_annotations(annotations)
+        self._annotations_dict[self._current_image_path] = annotations
+        self._schedule_autosave()
+        window = self.window()
+        if hasattr(window, "statusbar"):
+            window.statusbar.showMessage("就绪")
         if not annotations:
             QMessageBox.information(self, "提示", "未检测到目标")
-            return
-        for ann in annotations:
-            self._scene._annotations.append(ann)
-            self._scene._draw_annotation(ann, len(self._scene._annotations) - 1)
-        self._scene.annotations_changed.emit()
-        self._save_current_annotations()
 
     def set_yolo_model(self, model) -> None:
         self._get_yolo_annotator().set_model(model)
@@ -1064,6 +1431,13 @@ class AnnotateWidget(QWidget):
             f"共处理 {total} 张图片\n检测到目标: {detected_count} 张"
         )
 
+    def _generate_default_dataset_name(self, datasets_dir: Path) -> str:
+        """扫描 datasets 目录,生成不冲突的 dataset1/dataset2/... 默认名称。"""
+        i = 1
+        while (datasets_dir / f"dataset{i}").exists():
+            i += 1
+        return f"dataset{i}"
+
     def _export_dataset(self) -> None:
         self._save_current_annotations()
         classes = self._label_manager.get_all_classes()
@@ -1076,7 +1450,15 @@ class AnnotateWidget(QWidget):
             return
         window = self.window()
         if getattr(window, "current_project_config", None) is not None:
-            output_dir = str(ProjectManager.get_dataset_dir(window.current_project_config))
+            datasets_dir = ProjectManager.get_dataset_dir(window.current_project_config)
+            datasets_dir.mkdir(parents=True, exist_ok=True)
+            default_name = self._generate_default_dataset_name(datasets_dir)
+            name, ok = QInputDialog.getText(
+                self, "导出数据集", "请输入数据集名称:", QLineEdit.Normal, default_name
+            )
+            if not ok or not name.strip():
+                return
+            output_dir = str(datasets_dir / name.strip())
         else:
             output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
             if not output_dir:
@@ -1172,13 +1554,16 @@ class AnnotateWidget(QWidget):
     def get_label_manager(self) -> LabelManager:
         return self._label_manager
 
-    def set_project_config(self, config: ProjectConfig) -> None:
+    def set_project_config(self, config: Optional[ProjectConfig]) -> None:
         self._autosave_timer.stop()
         self._current_image_path = ""
         self._image_list.clear()
         self._annotations_dict.clear()
         self._image_list_widget.clear()
         self._scene.clear_annotations()
+        if config is None:
+            # 自由空间模式:不加载项目数据
+            return
         self._label_manager.load_from_project(config)
         self._update_class_list()
         self._update_scene_colors()
@@ -1246,8 +1631,6 @@ class AnnotateWidget(QWidget):
             self._image_list_widget.setCurrentRow(self._image_list.index(current_path))
 
     def _save_annotations_to_project(self) -> bool:
-        if self._current_image_path:
-            self._save_current_annotations()
         window = self.window()
         if not hasattr(window, "current_project_config"):
             return False

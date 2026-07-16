@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>训练配置 - YOLO26 App</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ============ Left Panel — Configuration ============ -->
+    <div class="config-panel">
+      <div class="panel-title">训练配置</div>
+
+      <!-- 基本配置 (expanded) -->
+      <div class="configCard expanded" onclick="toggleCard(this)">
+        <div class="configCard-header">
+          <span class="collapse-arrow"></span>
+          <span class="card-bar"></span>
+          <span class="card-title-text">基本配置</span>
+          <span class="card-badge">11 项</span>
+        </div>
+        <div class="configCard-body">
+          <div class="form-grid">
+            <!-- Row 1 -->
+            <div class="form-row">
+              <label class="form-label">任务类型</label>
+              <select class="form-select">
+                <option value="detect" selected>detect</option>
+                <option value="segment">segment</option>
+                <option value="classify">classify</option>
+                <option value="pose">pose</option>
+                <option value="obb">obb</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">模型系列</label>
+              <select class="form-select">
+                <option value="yolo26" selected>YOLO26</option>
+                <option value="yolov11">YOLOv11</option>
+                <option value="yolov8">YOLOv8</option>
+              </select>
+            </div>
+
+            <!-- Row 2 -->
+            <div class="form-row">
+              <label class="form-label">模型大小</label>
+              <select class="form-select">
+                <option value="n" selected>n (nano)</option>
+                <option value="s">s (small)</option>
+                <option value="m">m (medium)</option>
+                <option value="l">l (large)</option>
+                <option value="x">x (extra)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Epochs</label>
+              <input type="number" class="form-input mono" value="100" min="1" max="1000">
+            </div>
+
+            <!-- Row 3 — full width -->
+            <div class="form-row full">
+              <label class="form-label">自定义模型</label>
+              <div class="file-input-group">
+                <input type="text" class="form-input mono" value="yolo26n.pt" placeholder="选择或输入模型路径...">
+                <button class="browse-btn" type="button">浏览</button>
+              </div>
+            </div>
+
+            <!-- Row 4 — full width -->
+            <div class="form-row full">
+              <label class="form-label">数据集</label>
+              <div class="file-input-group">
+                <input type="text" class="form-input mono" value="coco128.yaml" placeholder="选择或输入数据集配置...">
+                <button class="browse-btn" type="button">浏览</button>
+              </div>
+            </div>
+
+            <!-- Row 5 -->
+            <div class="form-row">
+              <label class="form-label">Batch</label>
+              <input type="number" class="form-input mono" value="16" min="1">
+            </div>
+            <div class="form-row">
+              <label class="form-label">图像尺寸</label>
+              <select class="form-select">
+                <option value="320">320</option>
+                <option value="416">416</option>
+                <option value="512">512</option>
+                <option value="640" selected>640</option>
+                <option value="1280">1280</option>
+              </select>
+            </div>
+
+            <!-- Row 6 -->
+            <div class="form-row">
+              <label class="form-label">设备</label>
+              <select class="form-select">
+                <option value="auto" selected>auto</option>
+                <option value="cpu">cpu</option>
+                <option value="0">cuda:0</option>
+                <option value="1">cuda:1</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="form-label">优化器</label>
+              <select class="form-select">
+                <option value="auto" selected>auto</option>
+                <option value="SGD">SGD</option>
+                <option value="Adam">Adam</option>
+                <option value="AdamW">AdamW</option>
+                <option value="NAdam">NAdam</option>
+              </select>
+            </div>
+
+            <!-- Row 7 -->
+            <div class="form-row">
+              <label class="form-label">学习率</label>
+              <input type="number" class="form-input mono" value="0.01" step="0.001" min="0">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 高级设置 (collapsed) -->
+      <div class="configCard collapsed" onclick="toggleCard(this)">
+        <div class="configCard-header">
+          <span class="collapse-arrow"></span>
+          <span class="card-bar"></span>
+          <span class="card-title-text">高级设置</span>
+          <span class="card-badge">4 项</span>
+        </div>
+        <div class="configCard-body">
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="form-label">Workers</label>
+              <input type="number" class="form-input mono" value="8" min="0">
+            </div>
+            <div class="form-row">
+              <label class="form-label" style="min-width: 64px;">Cache</label>
+              <div class="checkbox-row">
+                <span class="checkbox-box"></span>
+                <span class="checkbox-label">启用缓存</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Seed</label>
+              <input type="number" class="form-input mono" value="42">
+            </div>
+            <div class="form-row">
+              <label class="form-label" style="min-width: 64px;">Plots</label>
+              <div class="checkbox-row">
+                <span class="checkbox-box checked"></span>
+                <span class="checkbox-label">生成图表</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据增强 (collapsed) -->
+      <div class="configCard collapsed" onclick="toggleCard(this)">
+        <div class="configCard-header">
+          <span class="collapse-arrow"></span>
+          <span class="card-bar"></span>
+          <span class="card-title-text">数据增强</span>
+          <span class="card-badge">预设</span>
+        </div>
+        <div class="configCard-body">
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="form-label">预设</label>
+              <select class="form-select">
+                <option value="none">无增强</option>
+                <option value="standard" selected>标准</option>
+                <option value="strong">强增强</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Right Panel — Monitoring ============ -->
+    <div class="monitor-panel">
+
+      <!-- Progress Card -->
+      <div class="progress-card">
+        <div class="card-title">训练进度</div>
+        <div class="progress-bar">
+          <div class="progress-bar-fill"></div>
+        </div>
+        <div class="progress-info">
+          <span class="progress-percent">65%</span>
+          <span class="progress-epoch">Epoch 65/100</span>
+          <span class="progress-loss">loss=0.42</span>
+        </div>
+        <div class="progress-meta-row">
+          <div class="progress-meta-item">
+            <span class="progress-meta-label">已用时间</span>
+            <span class="progress-meta-value">00:48:15</span>
+          </div>
+          <div class="progress-meta-item">
+            <span class="progress-meta-label">预计剩余</span>
+            <span class="progress-meta-value">00:25:53</span>
+          </div>
+          <div class="progress-meta-item">
+            <span class="progress-meta-label">GPU 显存</span>
+            <span class="progress-meta-value">18.2 / 24 GB</span>
+          </div>
+          <div class="progress-meta-item">
+            <span class="progress-meta-label">学习率</span>
+            <span class="progress-meta-value">0.00085</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log Card -->
+      <div class="log-card">
+        <div class="log-header">
+          <div class="card-title">训练日志</div>
+          <div class="log-status">
+            <span class="status-dot"></span>
+            <span>运行中</span>
+          </div>
+        </div>
+        <div class="log-body">
+          <div class="log-entry">
+            <span class="log-time">[12:00]</span>
+            <span class="log-msg">开始训练...</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:00]</span>
+            <span class="log-msg">加载数据集配置: coco128.yaml</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:01]</span>
+            <span class="log-msg">初始化模型: YOLO26n (nano)</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:01]</span>
+            <span class="log-msg">训练设备: NVIDIA RTX 4090 (CUDA 0)</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:02]</span>
+            <span class="log-msg">数据集样本数: 1280 (训练) / 64 (验证)</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:02]</span>
+            <span class="log-msg progress">Epoch 1/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:05]</span>
+            <span class="log-msg metric">loss=0.523, lr=0.0100</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:08]</span>
+            <span class="log-msg success">Epoch 1/100 完成 | mAP=0.124</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:08]</span>
+            <span class="log-msg progress">Epoch 2/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:11]</span>
+            <span class="log-msg metric">loss=0.487, lr=0.0100</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:14]</span>
+            <span class="log-msg success">Epoch 2/100 完成 | mAP=0.189</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:14]</span>
+            <span class="log-msg progress">Epoch 3/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:17]</span>
+            <span class="log-msg metric">loss=0.451, lr=0.0100</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:20]</span>
+            <span class="log-msg success">Epoch 3/100 完成 | mAP=0.243</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:20]</span>
+            <span class="log-msg progress">Epoch 4/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:23]</span>
+            <span class="log-msg metric">loss=0.418, lr=0.0095</span>
+          </div>
+          <div class="log-ellipsis">. . .</div>
+          <div class="log-entry">
+            <span class="log-time">[12:42]</span>
+            <span class="log-msg progress">Epoch 64/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:45]</span>
+            <span class="log-msg metric">loss=0.43, lr=0.0009</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:45]</span>
+            <span class="log-msg success">Epoch 64/100 完成 | mAP=0.712</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:45]</span>
+            <span class="log-msg progress">Epoch 65/100 开始</span>
+          </div>
+          <div class="log-entry">
+            <span class="log-time">[12:48]</span>
+            <span class="log-msg metric">loss=0.42, lr=0.0009</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="action-buttons">
+        <button class="btn-action btn-start" type="button">
+          <span class="btn-icon btn-icon-play"></span>
+          <span>开始训练</span>
+        </button>
+        <button class="btn-action btn-stop" type="button">
+          <span class="btn-icon btn-icon-stop"></span>
+          <span>停止训练</span>
+        </button>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    function toggleCard(card) {
+      card.classList.toggle('collapsed');
+      card.classList.toggle('expanded');
+    }
+  </script>
+
+    <style>
+    /* ============ Reset ============ */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      background: var(--color-base);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-base);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ============ Page Layout ============ */
+    .page {
+      width: 1440px;
+      height: 852px;
+      display: flex;
+      background: var(--color-base);
+      overflow: hidden;
+    }
+
+    /* ============ Left Panel — Configuration ============ */
+    .config-panel {
+      flex: 3;
+      min-width: 0;
+      padding: 20px 24px;
+      overflow-y: auto;
+      border-right: 1px solid var(--color-surface-0);
+    }
+
+    .panel-title {
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-title::before {
+      content: "";
+      width: 4px;
+      height: 18px;
+      background: var(--color-primary);
+      border-radius: 2px;
+    }
+
+    /* ============ Config Card ============ */
+    .configCard {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      margin-bottom: 14px;
+      overflow: hidden;
+      transition: border-color var(--transition-fast);
+    }
+
+    .configCard:hover {
+      border-color: var(--color-surface-1);
+    }
+
+    .configCard-header {
+      padding: 11px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--color-text);
+      cursor: pointer;
+      user-select: none;
+      transition: background var(--transition-fast);
+    }
+
+    .configCard-header:hover {
+      background: var(--color-surface-0);
+    }
+
+    .configCard-header .collapse-arrow {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 5px solid var(--color-text-muted);
+      border-top: 4px solid transparent;
+      border-bottom: 4px solid transparent;
+      transition: transform var(--transition-fast);
+      flex-shrink: 0;
+    }
+
+    .configCard.expanded .collapse-arrow {
+      transform: rotate(90deg);
+    }
+
+    .configCard-header .card-bar {
+      width: 3px;
+      height: 14px;
+      background: var(--color-primary);
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .configCard.collapsed .card-bar {
+      background: var(--color-surface-2);
+    }
+
+    .configCard-header .card-title-text {
+      flex: 1;
+    }
+
+    .configCard-header .card-badge {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+      background: var(--color-surface-0);
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+    }
+
+    .configCard-body {
+      padding: 16px;
+      border-top: 1px solid var(--color-surface-0);
+    }
+
+    .configCard.collapsed .configCard-body {
+      display: none;
+    }
+
+    /* ============ Form ============ */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px 20px;
+    }
+
+    .form-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .form-row.full {
+      grid-column: 1 / -1;
+    }
+
+    .form-label {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+      white-space: nowrap;
+      min-width: 64px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    /* ============ Form Inputs ============ */
+    .form-input,
+    .form-select {
+      flex: 1;
+      min-width: 0;
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      color: var(--color-text);
+      padding: 6px 10px;
+      font-size: var(--font-size-sm);
+      font-family: var(--font-sans);
+      outline: none;
+      transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+      height: 30px;
+    }
+
+    .form-input.mono,
+    .form-select.mono {
+      font-family: var(--font-mono);
+    }
+
+    .form-input:focus,
+    .form-select:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.15);
+    }
+
+    .form-input::placeholder {
+      color: var(--color-text-muted);
+    }
+
+    /* Select custom arrow */
+    .form-select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23a6adc8' d='M5 6L0 0h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+      cursor: pointer;
+    }
+
+    .form-select option {
+      background: var(--color-crust);
+      color: var(--color-text);
+    }
+
+    /* Number input — hide default spinner for cleaner look */
+    .form-input[type="number"] {
+      -moz-appearance: textfield;
+    }
+
+    .form-input[type="number"]::-webkit-inner-spin-button,
+    .form-input[type="number"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    /* ============ File Input Group ============ */
+    .file-input-group {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .file-input-group .form-input {
+      flex: 1;
+    }
+
+    .browse-btn {
+      background: var(--color-surface-1);
+      border: 1px solid var(--color-surface-2);
+      border-radius: var(--radius-md);
+      color: var(--color-text-subtle);
+      padding: 6px 14px;
+      font-size: var(--font-size-sm);
+      font-family: var(--font-sans);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all var(--transition-fast);
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .browse-btn:hover {
+      background: var(--color-surface-2);
+      color: var(--color-text);
+    }
+
+    /* ============ Checkbox ============ */
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .checkbox-box {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--color-surface-2);
+      border-radius: var(--radius-sm);
+      background: var(--color-surface-0);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-fast);
+      flex-shrink: 0;
+    }
+
+    .checkbox-box.checked {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+
+    .checkbox-box.checked::after {
+      content: "";
+      width: 4px;
+      height: 8px;
+      border: solid var(--color-crust);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg) translate(-1px, -1px);
+    }
+
+    .checkbox-label {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+    }
+
+    /* ============ Right Panel — Monitoring ============ */
+    .monitor-panel {
+      flex: 2;
+      min-width: 360px;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background: var(--color-mantle);
+    }
+
+    /* ============ Progress Card ============ */
+    .progress-card {
+      background: var(--color-base);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      padding: 16px 18px;
+    }
+
+    .card-title {
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title::before {
+      content: "";
+      width: 3px;
+      height: 14px;
+      background: var(--color-primary);
+      border-radius: 2px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 10px;
+      background: var(--color-surface-0);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-bottom: 12px;
+      position: relative;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 65%;
+      background: linear-gradient(90deg, var(--color-primary), var(--color-primary-hover));
+      border-radius: var(--radius-sm);
+      transition: width var(--transition-normal);
+      position: relative;
+    }
+
+    .progress-bar-fill::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+      animation: shimmer 2s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .progress-percent {
+      font-size: var(--font-size-xl);
+      font-weight: 700;
+      color: var(--color-primary);
+      font-family: var(--font-mono);
+      letter-spacing: 0.5px;
+    }
+
+    .progress-epoch {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+    }
+
+    .progress-loss {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-warning);
+    }
+
+    .progress-meta-row {
+      display: flex;
+      justify-content: space-between;
+      padding-top: 10px;
+      border-top: 1px solid var(--color-surface-0);
+    }
+
+    .progress-meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .progress-meta-label {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+    }
+
+    .progress-meta-value {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+    }
+
+    /* ============ Log Card ============ */
+    .log-card {
+      flex: 1;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .log-header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--color-mantle);
+    }
+
+    .log-header .card-title {
+      margin-bottom: 0;
+    }
+
+    .log-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: var(--font-size-xs);
+      color: var(--color-success);
+      font-family: var(--font-mono);
+    }
+
+    .log-status .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 6px var(--color-success);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .log-body {
+      flex: 1;
+      padding: 12px 16px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      line-height: 1.8;
+    }
+
+    .log-entry {
+      display: flex;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .log-time {
+      color: var(--color-text-muted);
+      flex-shrink: 0;
+    }
+
+    .log-msg {
+      color: var(--color-text-subtle);
+    }
+
+    .log-msg.progress {
+      color: var(--color-primary);
+    }
+
+    .log-msg.metric {
+      color: var(--color-warning);
+    }
+
+    .log-msg.success {
+      color: var(--color-success);
+    }
+
+    .log-divider {
+      color: var(--color-surface-1);
+      letter-spacing: 2px;
+    }
+
+    .log-ellipsis {
+      color: var(--color-text-muted);
+      text-align: center;
+      padding: 4px 0;
+      letter-spacing: 4px;
+    }
+
+    /* ============ Action Buttons ============ */
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-action {
+      flex: 1;
+      padding: 12px 20px;
+      border: none;
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-start {
+      background: var(--color-success);
+      color: var(--color-crust);
+      box-shadow: 0 2px 8px rgba(166, 227, 161, 0.2);
+    }
+
+    .btn-start:hover {
+      filter: brightness(1.1);
+      box-shadow: 0 4px 12px rgba(166, 227, 161, 0.3);
+    }
+
+    .btn-start:active {
+      transform: translateY(1px);
+    }
+
+    .btn-stop {
+      background: var(--color-danger);
+      color: var(--color-crust);
+      box-shadow: 0 2px 8px rgba(243, 139, 168, 0.2);
+    }
+
+    .btn-stop:hover {
+      filter: brightness(1.1);
+      box-shadow: 0 4px 12px rgba(243, 139, 168, 0.3);
+    }
+
+    .btn-stop:active {
+      transform: translateY(1px);
+    }
+
+    .btn-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+    }
+
+    .btn-icon-play {
+      width: 0;
+      height: 0;
+      border-left: 9px solid currentColor;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+    }
+
+    .btn-icon-stop {
+      width: 10px;
+      height: 10px;
+      background: currentColor;
+      border-radius: 1px;
+    }
+
+    /* ============ Scrollbar ============ */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--color-surface-1);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--color-surface-2);
+    }
+  </style>
+</body>
+</html>

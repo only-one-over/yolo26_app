@@ -81,7 +81,7 @@ class ExportDialog(QDialog):
         self._model_task = task
         self.setWindowTitle("导出模型")
         self.setModal(True)
-        self.setMinimumSize(500, 600)
+        self.setMinimumSize(560, 640)
 
         self._param_widgets = {}
 
@@ -89,6 +89,7 @@ class ExportDialog(QDialog):
 
         # --- 任务预设 ---
         preset_group = QGroupBox("任务预设")
+        preset_group.setObjectName("configCard")
         preset_layout = QVBoxLayout(preset_group)
         self._preset_combo = QComboBox()
         self._preset_combo.addItems(list(EXPORT_PRESETS.keys()))
@@ -104,7 +105,7 @@ class ExportDialog(QDialog):
 
         # 不匹配警告标签
         self._warning_label = QLabel()
-        self._warning_label.setStyleSheet("color: #f9e2af; font-size: 12px;")
+        self._warning_label.setObjectName("warningLabel")
         self._warning_label.setVisible(False)
         preset_layout.addWidget(self._warning_label)
 
@@ -112,6 +113,7 @@ class ExportDialog(QDialog):
 
         # --- 导出格式 ---
         format_group = QGroupBox("导出格式")
+        format_group.setObjectName("configCard")
         format_layout = QHBoxLayout(format_group)
         self._format_combo = QComboBox()
         for format_key in FORMAT_PARAMS:
@@ -124,6 +126,7 @@ class ExportDialog(QDialog):
 
         # --- 导出参数 ---
         params_group = QGroupBox("导出参数")
+        params_group.setObjectName("configCard")
         params_layout = QVBoxLayout(params_group)
 
         scroll = QScrollArea()
@@ -180,7 +183,7 @@ class ExportDialog(QDialog):
 
         # int8 hint label
         self._int8_hint_label = QLabel("INT8 量化需要校准数据集")
-        self._int8_hint_label.setStyleSheet("color: #f9e2af; font-size: 12px;")
+        self._int8_hint_label.setObjectName("warningLabel")
         self._int8_hint_label.setVisible(False)
         form.addRow("", self._int8_hint_label)
 
@@ -232,7 +235,7 @@ class ExportDialog(QDialog):
             "TensorRT 导出需要 NVIDIA CUDA GPU；生成的 .engine 与导出设备及 TensorRT 版本相关。"
         )
         self._engine_hint_label.setWordWrap(True)
-        self._engine_hint_label.setStyleSheet("color: #f9e2af; font-size: 12px;")
+        self._engine_hint_label.setObjectName("warningLabel")
         self._engine_hint_label.setVisible(False)
         form.addRow("", self._engine_hint_label)
 
@@ -242,7 +245,10 @@ class ExportDialog(QDialog):
 
         # --- 底部按钮 ---
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        btn_layout.setContentsMargins(12, 8, 12, 12)
         self._confirm_btn = QPushButton("确认导出")
+        self._confirm_btn.setObjectName("primaryButton")
         self._confirm_btn.clicked.connect(self._on_confirm)
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)

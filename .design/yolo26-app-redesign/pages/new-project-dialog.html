@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 App - 新建项目</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="overlay">
+    <div class="dialog">
+      <!-- ============ Title Bar ============ -->
+      <div class="title-bar">
+        <div class="title-left">
+          <span class="title-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </span>
+          <span class="title-text">新建项目</span>
+        </div>
+        <button class="close-btn" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- ============ Form Body ============ -->
+      <div class="form-body">
+        <!-- 项目名称 -->
+        <div class="field">
+          <label class="field-label">项目名称</label>
+          <input type="text" class="text-input" placeholder="my-yolo-project" value="my-yolo-project">
+          <span class="hint-text">在工作区间中创建新项目文件夹</span>
+        </div>
+
+        <!-- 项目路径 -->
+        <div class="field">
+          <label class="field-label">项目路径</label>
+          <div class="input-row">
+            <input type="text" class="text-input" value="D:\workspace\my-yolo-project">
+            <button class="browse-btn" title="浏览">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              浏览
+            </button>
+          </div>
+          <span class="hint-text">选择项目存储位置</span>
+        </div>
+
+        <!-- 任务类型 -->
+        <div class="field">
+          <label class="field-label">任务类型</label>
+          <div class="task-grid">
+            <!-- 检测 (selected) -->
+            <div class="task-card selected">
+              <span class="task-radio">
+                <span class="task-radio-dot"></span>
+              </span>
+              <span class="task-name-zh">检测</span>
+              <span class="task-name-en">detect</span>
+            </div>
+            <!-- 分割 -->
+            <div class="task-card">
+              <span class="task-radio">
+                <span class="task-radio-dot"></span>
+              </span>
+              <span class="task-name-zh">分割</span>
+              <span class="task-name-en">segment</span>
+            </div>
+            <!-- 分类 -->
+            <div class="task-card">
+              <span class="task-radio">
+                <span class="task-radio-dot"></span>
+              </span>
+              <span class="task-name-zh">分类</span>
+              <span class="task-name-en">classify</span>
+            </div>
+            <!-- 关键点 -->
+            <div class="task-card">
+              <span class="task-radio">
+                <span class="task-radio-dot"></span>
+              </span>
+              <span class="task-name-zh">关键点</span>
+              <span class="task-name-en">pose</span>
+            </div>
+          </div>
+          <span class="hint-text">选择模型任务类型</span>
+        </div>
+      </div>
+
+      <!-- ============ Footer Buttons ============ -->
+      <div class="footer">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">创建项目</button>
+      </div>
+    </div>
+  </div>
+
+    <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-crust);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* ============ Overlay ============ */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(2px);
+    }
+
+    /* ============ Dialog ============ */
+    .dialog {
+      width: 480px;
+      height: 420px;
+      background: var(--color-base);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ============ Title Bar ============ */
+    .title-bar {
+      height: 44px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--space-5);
+      border-bottom: 1px solid var(--color-surface-0);
+      user-select: none;
+    }
+
+    .title-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .title-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--color-primary);
+    }
+
+    .title-icon svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .title-text {
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .close-btn {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: background var(--transition-fast), color var(--transition-fast);
+    }
+
+    .close-btn:hover {
+      background: var(--color-surface-0);
+      color: var(--color-text);
+    }
+
+    .close-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* ============ Form Body ============ */
+    .form-body {
+      flex: 1;
+      padding: var(--space-5);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-4);
+      overflow-y: auto;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .field-label {
+      font-size: var(--font-size-sm);
+      font-weight: 500;
+      color: var(--color-text-subtle);
+    }
+
+    .input-row {
+      display: flex;
+      gap: var(--space-2);
+      align-items: stretch;
+    }
+
+    .text-input {
+      flex: 1;
+      height: 34px;
+      padding: 0 var(--space-3);
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-md);
+      color: var(--color-text);
+      font-size: var(--font-size-base);
+      font-family: var(--font-mono);
+      outline: none;
+      transition: border-color var(--transition-fast), background var(--transition-fast);
+    }
+
+    .text-input::placeholder {
+      color: var(--color-text-muted);
+    }
+
+    .text-input:focus {
+      border-color: var(--color-primary);
+      background: var(--color-crust);
+    }
+
+    .browse-btn {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: 34px;
+      padding: 0 var(--space-3);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      color: var(--color-text-subtle);
+      font-size: var(--font-size-sm);
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast);
+      white-space: nowrap;
+    }
+
+    .browse-btn:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+      color: var(--color-text);
+    }
+
+    .browse-btn svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    .hint-text {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      line-height: 1.4;
+    }
+
+    /* ============ Task Type Grid ============ */
+    .task-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-2);
+    }
+
+    .task-card {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: 44px;
+      padding: 0 var(--space-3);
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: border-color var(--transition-fast), background var(--transition-fast);
+      user-select: none;
+    }
+
+    .task-card:hover {
+      border-color: var(--color-surface-2);
+      background: var(--color-surface-0);
+    }
+
+    .task-card.selected {
+      background: rgba(137, 180, 250, 0.12);
+      border-color: var(--color-primary);
+    }
+
+    .task-radio {
+      width: 14px;
+      height: 14px;
+      min-width: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--color-surface-2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color var(--transition-fast);
+    }
+
+    .task-card.selected .task-radio {
+      border-color: var(--color-primary);
+    }
+
+    .task-radio-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: transparent;
+      transition: background var(--transition-fast);
+    }
+
+    .task-card.selected .task-radio-dot {
+      background: var(--color-primary);
+    }
+
+    .task-name-zh {
+      font-size: var(--font-size-base);
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .task-card.selected .task-name-zh {
+      color: var(--color-primary);
+    }
+
+    .task-name-en {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .task-card.selected .task-name-en {
+      color: var(--color-primary-hover);
+    }
+
+    /* ============ Footer Buttons ============ */
+    .footer {
+      height: 56px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-3);
+      padding: 0 var(--space-5);
+      border-top: 1px solid var(--color-surface-0);
+    }
+
+    .btn {
+      height: 34px;
+      padding: 0 var(--space-5);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-base);
+      font-family: var(--font-sans);
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+      white-space: nowrap;
+    }
+
+    .btn-secondary {
+      background: var(--color-surface-0);
+      border-color: var(--color-surface-1);
+      color: var(--color-text-subtle);
+    }
+
+    .btn-secondary:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+      color: var(--color-text);
+    }
+
+    .btn-primary {
+      background: var(--color-primary);
+      color: var(--color-crust);
+    }
+
+    .btn-primary:hover {
+      background: var(--color-primary-hover);
+    }
+  </style>
+</body>
+</html>

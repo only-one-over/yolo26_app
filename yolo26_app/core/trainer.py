@@ -4,6 +4,7 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from yolo26_app.core.config import TrainConfig
+from yolo26_app.core.model_registry import MODEL_FAMILY_TASK_MODEL_MAP, AUGMENTATION_PRESET_LABELS
 
 
 class YOLOTrainer(QThread):
@@ -11,29 +12,6 @@ class YOLOTrainer(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
-
-    MODEL_FAMILY_TASK_MODEL_MAP = {
-        "yolo26": {
-            "detect": "yolo26{size}.pt",
-            "segment": "yolo26{size}-seg.pt",
-            "classify": "yolo26{size}-cls.pt",
-            "pose": "yolo26{size}-pose.pt",
-        },
-        "yolov8": {
-            "detect": "yolov8{size}.pt",
-            "segment": "yolov8{size}-seg.pt",
-            "classify": "yolov8{size}-cls.pt",
-            "pose": "yolov8{size}-pose.pt",
-        },
-    }
-
-    AUGMENTATION_PRESET_LABELS = {
-        "off": "关闭",
-        "light": "轻度",
-        "default": "默认",
-        "strong": "强增强",
-        "custom": "自定义",
-    }
 
     def __init__(self, config: TrainConfig, project_path: str) -> None:
         super().__init__()
@@ -48,6 +26,12 @@ class YOLOTrainer(QThread):
         epoch = getattr(trainer, "epoch", 0) + 1
         total = getattr(trainer, "epochs", self.config.epochs)
         self.progress_signal.emit(epoch, total)
+
+    def _on_train_batch_end(self, trainer) -> None:
+        """每个 batch 结束时检查停止标志,减少长 epoch 的停止延迟。"""
+        if self._stop_flag:
+            trainer.stop_training = True
+            return
 
     def _build_augmentation_kwargs(self) -> dict:
         if self.config.augmentation_enabled:
@@ -90,7 +74,7 @@ class YOLOTrainer(QThread):
         }
 
     def _augmentation_log_summary(self, aug_kwargs: dict) -> str:
-        preset = self.AUGMENTATION_PRESET_LABELS.get(self.config.augmentation_preset, self.config.augmentation_preset)
+        preset = AUGMENTATION_PRESET_LABELS.get(self.config.augmentation_preset, self.config.augmentation_preset)
         enabled = "启用" if self.config.augmentation_enabled else "关闭"
         status = f"数据增强: {enabled}, 预设={preset}"
         values = (
@@ -105,6 +89,9 @@ class YOLOTrainer(QThread):
         return f"{status}; {values}"
 
     def run(self) -> None:
+        model = None
+        handler = None
+        logger = None
         try:
             from ultralytics import YOLO
 
@@ -115,7 +102,7 @@ class YOLOTrainer(QThread):
                 model_file = self.config.pretrained_model
             else:
                 family = self.config.model_family or "yolo26"
-                family_map = self.MODEL_FAMILY_TASK_MODEL_MAP.get(family, self.MODEL_FAMILY_TASK_MODEL_MAP["yolo26"])
+                family_map = MODEL_FAMILY_TASK_MODEL_MAP.get(family, MODEL_FAMILY_TASK_MODEL_MAP["yolo26"])
                 model_template = family_map.get(task, family_map["detect"])
                 model_file = model_template.format(size=size)
                 # 预训练模型统一存到 system_model/yolo/，不存在时 ultralytics 自动下载
@@ -133,6 +120,7 @@ class YOLOTrainer(QThread):
             logger.addHandler(handler)
 
             model.add_callback("on_train_epoch_end", self._on_train_epoch_end)
+            model.add_callback("on_train_batch_end", self._on_train_batch_end)
 
             project_dir = str(Path(self.project_path) / "runs")
             name = self.config.name or "train"
@@ -166,8 +154,6 @@ class YOLOTrainer(QThread):
                 **aug_kwargs,
             )
 
-            logger.removeHandler(handler)
-
             if self._stop_flag:
                 self.log_signal.emit("训练已被用户停止")
                 self.finished_signal.emit("训练已被用户停止")
@@ -195,6 +181,14 @@ class YOLOTrainer(QThread):
 
         except Exception as e:
             self.error_signal.emit(f"训练出错: {str(e)}")
+        finally:
+            if handler is not None and logger is not None:
+                logger.removeHandler(handler)
+            if model is not None:
+                del model
+                import torch
+
+                torch.cuda.empty_cache()
 
     def stop(self) -> None:
         self._stop_flag = True

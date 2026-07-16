@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 App - 主窗口</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="window">
+    <!-- ============ Top Bar ============ -->
+    <div class="top-bar">
+      <div class="top-bar-left">
+        <span class="logo">YOLO26</span>
+        <div class="logo-divider"></div>
+        <span class="app-title">YOLO26 App</span>
+      </div>
+      <div class="top-bar-right">
+        <div class="workspace-dropdown">
+          <span class="workspace-label">工作区间:</span>
+          <span class="workspace-value">my-project</span>
+          <span class="workspace-arrow">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </span>
+        </div>
+        <button class="icon-btn" title="新建">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+        <button class="icon-btn" title="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ============ Body ============ -->
+    <div class="body">
+      <!-- ============ Sidebar ============ -->
+      <div class="sidebar">
+        <div class="nav-group">
+          <!-- 标注 (annotate) - ACTIVE -->
+          <button class="nav-btn active" title="标注">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+              <line x1="7" y1="7" x2="7.01" y2="7"></line>
+            </svg>
+            <span class="nav-label">标注</span>
+          </button>
+          <!-- 训练 (train) -->
+          <button class="nav-btn" title="训练">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span class="nav-label">训练</span>
+          </button>
+          <!-- 测试 (test) -->
+          <button class="nav-btn" title="测试">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span class="nav-label">测试</span>
+          </button>
+        </div>
+        <div class="nav-spacer"></div>
+        <!-- 设置 (settings) -->
+        <button class="nav-btn" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span class="nav-label">设置</span>
+        </button>
+      </div>
+
+      <!-- ============ Content Area ============ -->
+      <div class="content">
+        <div class="content-placeholder">
+          <div class="content-placeholder-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+              <line x1="15" y1="3" x2="15" y2="21"></line>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="3" y1="15" x2="21" y2="15"></line>
+            </svg>
+          </div>
+          <span class="content-placeholder-text">页面内容区</span>
+          <span class="content-placeholder-hint">选择左侧导航项以加载内容</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Status Bar ============ -->
+    <div class="status-bar">
+      <div class="status-section">
+        <span class="status-dot"></span>
+        <span class="status-label">GPU:</span>
+        <span class="status-value">NVIDIA RTX 4090</span>
+      </div>
+      <div class="status-center">
+        <span class="status-label">项目:</span>
+        <span class="status-value">my-project</span>
+      </div>
+      <div class="status-ready">
+        <span class="status-dot"></span>
+        <span>就绪</span>
+      </div>
+    </div>
+  </div>
+
+    <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-crust);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    /* Desktop window frame */
+    .window {
+      width: 1440px;
+      height: 900px;
+      background: var(--color-base);
+      color: var(--color-text);
+      display: flex;
+      flex-direction: column;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg), 0 0 0 1px var(--color-surface-0);
+      position: relative;
+    }
+
+    /* ============ Top Bar ============ */
+    .top-bar {
+      height: 48px;
+      min-height: 48px;
+      background: var(--color-mantle);
+      border-bottom: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--space-4);
+      user-select: none;
+    }
+
+    .top-bar-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .logo {
+      font-size: var(--font-size-lg);
+      font-weight: 700;
+      color: var(--color-primary);
+      letter-spacing: 0.5px;
+      font-family: var(--font-mono);
+    }
+
+    .logo-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--color-surface-1);
+    }
+
+    .app-title {
+      font-size: var(--font-size-md);
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .top-bar-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .workspace-dropdown {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: 32px;
+      padding: 0 var(--space-3);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast);
+    }
+
+    .workspace-dropdown:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+    }
+
+    .workspace-label {
+      color: var(--color-text-muted);
+    }
+
+    .workspace-value {
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+    }
+
+    .workspace-arrow {
+      color: var(--color-text-muted);
+      display: flex;
+      align-items: center;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      color: var(--color-text-subtle);
+      cursor: pointer;
+      transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+    }
+
+    .icon-btn:hover {
+      background: var(--color-surface-0);
+      color: var(--color-text);
+      border-color: var(--color-surface-1);
+    }
+
+    .icon-btn:active {
+      background: var(--color-surface-1);
+    }
+
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    /* ============ Body (Sidebar + Content) ============ */
+    .body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ============ Sidebar ============ */
+    .sidebar {
+      width: 64px;
+      min-width: 64px;
+      background: var(--color-mantle);
+      border-right: 1px solid var(--color-surface-0);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: var(--space-3) 0;
+      user-select: none;
+    }
+
+    .nav-group {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .nav-btn {
+      width: 48px;
+      height: 56px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-1);
+      background: transparent;
+      border: none;
+      border-left: 3px solid transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: background var(--transition-fast), color var(--transition-fast);
+      position: relative;
+      border-radius: var(--radius-sm);
+    }
+
+    .nav-btn:hover {
+      background: var(--color-surface-0);
+      color: var(--color-text);
+    }
+
+    .nav-btn.active {
+      color: var(--color-primary);
+      border-left: 3px solid var(--color-primary);
+      background: var(--color-surface-0);
+    }
+
+    .nav-btn.active::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--color-primary);
+    }
+
+    .nav-btn svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .nav-label {
+      font-size: var(--font-size-xs);
+      font-weight: 500;
+      line-height: 1;
+    }
+
+    .nav-spacer {
+      flex: 1;
+    }
+
+    /* ============ Content Area ============ */
+    .content {
+      flex: 1;
+      background: var(--color-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .content-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--space-4);
+      color: var(--color-text-muted);
+    }
+
+    .content-placeholder-icon {
+      width: 64px;
+      height: 64px;
+      border: 2px dashed var(--color-surface-1);
+      border-radius: var(--radius-xl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--color-surface-2);
+    }
+
+    .content-placeholder-icon svg {
+      width: 32px;
+      height: 32px;
+    }
+
+    .content-placeholder-text {
+      font-size: var(--font-size-lg);
+      color: var(--color-text-muted);
+      font-weight: 500;
+      letter-spacing: 1px;
+    }
+
+    .content-placeholder-hint {
+      font-size: var(--font-size-sm);
+      color: var(--color-surface-2);
+    }
+
+    /* ============ Status Bar ============ */
+    .status-bar {
+      height: 28px;
+      min-height: 28px;
+      background: var(--color-mantle);
+      border-top: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--space-4);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      user-select: none;
+    }
+
+    .status-section {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .status-center {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .status-bar {
+      position: relative;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 6px rgba(166, 227, 161, 0.5);
+    }
+
+    .status-label {
+      color: var(--color-text-muted);
+    }
+
+    .status-value {
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+    }
+
+    .status-ready {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--color-success);
+    }
+
+    .status-ready .status-dot {
+      background: var(--color-success);
+    }
+  </style>
+</body>
+</html>

@@ -1,0 +1,122 @@
+{
+  "data": [
+    {
+      "id": "page-design-system",
+      "title": "设计系统总览",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/design-system.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-main-window",
+      "title": "主窗口",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 1063,
+        "group": 1
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/main-window.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-annotate",
+      "title": "标注页",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 1454,
+        "group": 2
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/annotate.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-train",
+      "title": "训练页",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 1831,
+        "group": 3
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/train.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-test",
+      "title": "测试页",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 2208,
+        "group": 4
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/test.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-export-dialog",
+      "title": "导出对话框",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 2585,
+        "group": 5
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/export-dialog.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-new-project-dialog",
+      "title": "新建项目对话框",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1720759600000,
+      "canvasData": {
+        "x": 0,
+        "y": 2962,
+        "group": 6
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/new-project-dialog.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "YOLO26 App UI 重构设计",
+    "designLibrary": null
+  }
+}

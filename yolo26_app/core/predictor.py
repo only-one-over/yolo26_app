@@ -21,6 +21,10 @@ class YOLOPredictor:
         self._onnx_error: str = ""
 
     def load_model(self, path: str, task: str = "") -> bool:
+        if self.model is not None:
+            del self.model
+            import torch
+            torch.cuda.empty_cache()
         try:
             if task and path.lower().endswith((".onnx", ".engine")):
                 self.model = YOLO(path, task=task)
@@ -47,11 +51,13 @@ class YOLOPredictor:
     def predict_image(self, image_path: str, conf: float = 0.25, iou: float = 0.7, imgsz: int = 640, device: str = "", max_det: int = 300) -> Tuple[np.ndarray, object]:
         if self.model is None:
             return np.array([]), None
-        image = cv2.imread(image_path)
+        image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             return np.array([]), None
-        half = self._should_half()
-        predict_kwargs = dict(source=image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, verbose=False, half=half)
+        quantize = self._should_quantize()
+        predict_kwargs = dict(source=image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, verbose=False)
+        if quantize is not None:
+            predict_kwargs["quantize"] = quantize
         if device:
             predict_kwargs["device"] = device
         if self._is_onnx and self._model_task:
@@ -65,8 +71,10 @@ class YOLOPredictor:
     def predict_frame(self, frame_np: np.ndarray, conf: float = 0.25, iou: float = 0.7, imgsz: int = 640, device: str = "", max_det: int = 300) -> Tuple[np.ndarray, object]:
         if self.model is None:
             return frame_np, None
-        half = self._should_half()
-        predict_kwargs = dict(source=frame_np, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, verbose=False, half=half)
+        quantize = self._should_quantize()
+        predict_kwargs = dict(source=frame_np, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, verbose=False)
+        if quantize is not None:
+            predict_kwargs["quantize"] = quantize
         if device:
             predict_kwargs["device"] = device
         if self._is_onnx and self._model_task:
@@ -163,8 +171,7 @@ class YOLOPredictor:
 
     def _prepare_export_kwargs(self, format: str, kwargs: dict) -> dict:
         prepared = dict(kwargs)
-        if format != "engine":
-            return prepared
+        is_engine = format == "engine"
 
         quantize = prepared.pop("quantize", None)
         if quantize not in (None, 8, 16, 32):
@@ -172,7 +179,7 @@ class YOLOPredictor:
         prepared.pop("half", None)
         prepared.pop("int8", None)
 
-        if quantize == 8:
+        if quantize == 8 and is_engine:
             data_path = str(prepared.get("data", "")).strip()
             if not data_path:
                 raise ValueError("TensorRT INT8 导出必须提供校准数据集 data.yaml")
@@ -193,10 +200,11 @@ class YOLOPredictor:
                 if not self._ultralytics_supports_export_arg("fraction"):
                     prepared.pop("fraction", None)
 
-        prepared.setdefault("device", "0")
-        workspace = prepared.get("workspace")
-        if workspace is not None and float(workspace) <= 0:
-            prepared.pop("workspace")
+        if is_engine:
+            prepared.setdefault("device", "0")
+            workspace = prepared.get("workspace")
+            if workspace is not None and float(workspace) <= 0:
+                prepared.pop("workspace")
         return prepared
 
     @staticmethod
@@ -317,16 +325,21 @@ class YOLOPredictor:
             if self._model_task:
                 kwargs["task"] = self._model_task
             test_model = YOLO(model_path, **kwargs)
-            if isinstance(imgsz, (tuple, list)):
-                height, width = int(imgsz[0]), int(imgsz[1])
-            else:
-                height = width = int(imgsz)
-            dummy = np.zeros((height, width, 3), dtype=np.uint8)
-            predict_kwargs = {"source": dummy, "imgsz": imgsz, "verbose": False}
-            if device:
-                predict_kwargs["device"] = device
-            test_model.predict(**predict_kwargs)
-            return True, ""
+            try:
+                if isinstance(imgsz, (tuple, list)):
+                    height, width = int(imgsz[0]), int(imgsz[1])
+                else:
+                    height = width = int(imgsz)
+                dummy = np.zeros((height, width, 3), dtype=np.uint8)
+                predict_kwargs = {"source": dummy, "imgsz": imgsz, "verbose": False}
+                if device:
+                    predict_kwargs["device"] = device
+                test_model.predict(**predict_kwargs)
+                return True, ""
+            finally:
+                del test_model
+                import torch
+                torch.cuda.empty_cache()
         except Exception as e:
             return False, str(e)
 
@@ -365,14 +378,14 @@ class YOLOPredictor:
             return "ONNX 模型推理未检测到目标\n可能原因: onnxruntime-gpu 与 CUDA 版本不匹配\n建议: pip install onnxruntime (使用CPU推理)"
         return ""
 
-    def _should_half(self) -> bool:
+    def _should_quantize(self) -> Optional[int]:
         if self._is_onnx:
-            return False
+            return None
         try:
             import torch
-            return torch.cuda.is_available()
+            return 16 if torch.cuda.is_available() else None
         except ImportError:
-            return False
+            return None
 
     def _guess_onnx_task(self, path: str) -> str:
         """Try to infer task type from ONNX model metadata."""

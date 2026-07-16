@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QGraphicsTextItem,
     QGraphicsEllipseItem,
     QGraphicsLineItem,
+    QGraphicsPixmapItem,
     QGraphicsSceneMouseEvent,
     QGraphicsSceneWheelEvent,
 )
@@ -456,10 +457,17 @@ class AnnotationScene(QGraphicsScene):
             self._graphics_items[index] = None
 
     def _redraw_all(self) -> None:
-        for item in self.items():
-            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem)):
+        # 优先遍历 _graphics_items 精确移除标注图元
+        for items in self._graphics_items:
+            if items is None:
+                continue
+            for item in items:
                 self.removeItem(item)
         self._graphics_items.clear()
+        # 兜底:扫描全场景移除可能残留的标注图元(含骨架线)
+        for item in self.items():
+            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsLineItem)):
+                self.removeItem(item)
         for i, ann in enumerate(self._annotations):
             self._draw_annotation(ann, i)
 
@@ -519,7 +527,7 @@ class AnnotationScene(QGraphicsScene):
         self._redo_stack.clear()
         self._cancel_drawing()
         for item in self.items():
-            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem)):
+            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsLineItem)):
                 self.removeItem(item)
 
     def get_annotations(self) -> list[AnnotationItem]:

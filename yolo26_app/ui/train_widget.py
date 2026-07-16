@@ -22,73 +22,25 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QCheckBox,
+    QFrame,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QCloseEvent
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig, normalize_augmentation_preset
+from yolo26_app.core.model_registry import (
+    MODEL_FAMILY_TASK_MODEL_MAP,
+    AUGMENTATION_PRESET_LABELS,
+    CUSTOM_AUGMENTATION_PRESET,
+    AUGMENTATION_PRESET_ORDER,
+    AUGMENTATION_PRESETS,
+)
 from yolo26_app.core.trainer import YOLOTrainer
 from yolo26_app.ui import styles
 
 MODEL_FAMILY_MAP = {
     "YOLO26": "yolo26",
     "YOLOv8": "yolov8",
-}
-
-MODEL_FAMILY_TASK_MODEL_MAP = {
-    "yolo26": {
-        "detect": "yolo26{size}.pt",
-        "segment": "yolo26{size}-seg.pt",
-        "classify": "yolo26{size}-cls.pt",
-        "pose": "yolo26{size}-pose.pt",
-    },
-    "yolov8": {
-        "detect": "yolov8{size}.pt",
-        "segment": "yolov8{size}-seg.pt",
-        "classify": "yolov8{size}-cls.pt",
-        "pose": "yolov8{size}-pose.pt",
-    },
-}
-
-CUSTOM_AUGMENTATION_PRESET = "custom"
-AUGMENTATION_PRESET_ORDER = ["off", "light", "default", "strong"]
-AUGMENTATION_PRESET_LABELS = {
-    "off": "关闭",
-    "light": "轻度",
-    "default": "默认",
-    "strong": "强增强",
-    CUSTOM_AUGMENTATION_PRESET: "自定义",
-}
-
-AUGMENTATION_PRESETS = {
-    "off": {
-        "hsv_h": 0, "hsv_s": 0, "hsv_v": 0,
-        "degrees": 0, "translate": 0, "scale": 0, "shear": 0, "perspective": 0,
-        "flipud": 0, "fliplr": 0,
-        "mosaic": 0, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0,
-        "auto_augment": "",
-    },
-    "light": {
-        "hsv_h": 0.01, "hsv_s": 0.3, "hsv_v": 0.2,
-        "degrees": 5, "translate": 0.05, "scale": 0.3, "shear": 0, "perspective": 0,
-        "flipud": 0, "fliplr": 0.3,
-        "mosaic": 0.5, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0.2,
-        "auto_augment": "randaugment",
-    },
-    "default": {
-        "hsv_h": 0.015, "hsv_s": 0.7, "hsv_v": 0.4,
-        "degrees": 0, "translate": 0.1, "scale": 0.5, "shear": 0, "perspective": 0,
-        "flipud": 0, "fliplr": 0.5,
-        "mosaic": 1.0, "mixup": 0, "cutmix": 0, "copy_paste": 0, "erasing": 0.4,
-        "auto_augment": "randaugment",
-    },
-    "strong": {
-        "hsv_h": 0.02, "hsv_s": 0.8, "hsv_v": 0.6,
-        "degrees": 15, "translate": 0.2, "scale": 0.7, "shear": 10, "perspective": 0.001,
-        "flipud": 0.2, "fliplr": 0.5,
-        "mosaic": 1.0, "mixup": 0.2, "cutmix": 0.1, "copy_paste": 0.1, "erasing": 0.4,
-        "auto_augment": "randaugment",
-    },
 }
 
 MODEL_INFO = {
@@ -115,9 +67,29 @@ class TrainWidget(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        config_group = QGroupBox("训练配置")
+        # Left panel: configuration (scrollable)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(12, 12, 8, 12)
+        left_layout.setSpacing(8)
+
+        # Right panel: monitoring (fixed min width)
+        right_panel = QWidget()
+        right_panel.setMinimumWidth(360)
+        right_panel.setObjectName("trainMonitorPanel")
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(8, 12, 12, 12)
+        right_layout.setSpacing(8)
+
+        config_group = QGroupBox("基本配置")
+        config_group.setObjectName("configCard")
         form = QFormLayout()
 
         self.task_combo = QComboBox()
@@ -129,7 +101,7 @@ class TrainWidget(QWidget):
         form.addRow("模型系列:", self.family_combo)
 
         self._task_info_label = QLabel(TASK_INFO.get("detect", ""))
-        self._task_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._task_info_label.setObjectName("infoLabel")
         self._task_info_label.setWordWrap(True)
         form.addRow("", self._task_info_label)
 
@@ -148,12 +120,12 @@ class TrainWidget(QWidget):
         form.addRow("自定义模型:", custom_model_row)
 
         self._model_preview_label = QLabel()
-        self._model_preview_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._model_preview_label.setObjectName("infoLabel")
         self._model_preview_label.setWordWrap(True)
         form.addRow("", self._model_preview_label)
 
         self._model_info_label = QLabel(MODEL_INFO.get("n", ""))
-        self._model_info_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._model_info_label.setObjectName("infoLabel")
         self._model_info_label.setWordWrap(True)
         form.addRow("", self._model_info_label)
 
@@ -207,9 +179,11 @@ class TrainWidget(QWidget):
         form.addRow("实验名称:", self.name_edit)
 
         config_group.setLayout(form)
+        left_layout.addWidget(config_group)
 
         # 高级设置组（可折叠）
         self._advanced_group = QGroupBox("高级设置")
+        self._advanced_group.setObjectName("configCard")
         self._advanced_group.setCheckable(True)
         self._advanced_group.setChecked(False)
         advanced_form = QFormLayout()
@@ -237,9 +211,9 @@ class TrainWidget(QWidget):
         self.close_mosaic_spin.setValue(10)
 
         # 数据增强分组
-        aug_container = QWidget()
-        aug_layout = QFormLayout(aug_container)
-        aug_layout.setContentsMargins(0, 0, 0, 0)
+        aug_group = QGroupBox("数据增强")
+        aug_group.setObjectName("configCard")
+        aug_layout = QFormLayout(aug_group)
 
         self.aug_enabled_check = QCheckBox()
         self.aug_enabled_check.setChecked(True)
@@ -253,7 +227,7 @@ class TrainWidget(QWidget):
         aug_layout.addRow("增强预设:", self.aug_preset_combo)
 
         self._augmentation_task_hint_label = QLabel()
-        self._augmentation_task_hint_label.setStyleSheet(styles.INFO_LABEL_STYLE)
+        self._augmentation_task_hint_label.setObjectName("infoLabel")
         self._augmentation_task_hint_label.setWordWrap(True)
         aug_layout.addRow("", self._augmentation_task_hint_label)
 
@@ -326,7 +300,7 @@ class TrainWidget(QWidget):
         expert_form.addRow("自动增强:", self.auto_augment_combo)
 
         expert_hint = QLabel("提示：擦除和自动增强主要用于分类增强或新版 Ultralytics 支持场景。")
-        expert_hint.setStyleSheet(styles.INFO_LABEL_STYLE)
+        expert_hint.setObjectName("infoLabel")
         expert_hint.setWordWrap(True)
         expert_form.addRow("", expert_hint)
 
@@ -336,19 +310,14 @@ class TrainWidget(QWidget):
         aug_advanced_layout.addWidget(expert_group)
 
         aug_layout.addRow(self._aug_advanced_widget)
-        advanced_form.addRow("数据增强:", aug_container)
 
         self._advanced_group.setLayout(advanced_form)
+        left_layout.addWidget(self._advanced_group)
+        left_layout.addWidget(aug_group)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.addWidget(config_group)
-        scroll_layout.addWidget(self._advanced_group)
-        scroll_layout.addStretch()
-        scroll_area.setWidget(scroll_content)
-        layout.addWidget(scroll_area)
+        left_layout.addStretch()
+        left_scroll.setWidget(left_container)
+        main_layout.addWidget(left_scroll, 1)
 
         self.size_combo.currentTextChanged.connect(self._update_model_info)
         self.task_combo.currentTextChanged.connect(self._update_task_info)
@@ -373,15 +342,16 @@ class TrainWidget(QWidget):
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
+        right_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
-        layout.addWidget(self.status_label)
+        right_layout.addWidget(self.status_label)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setObjectName("logView")
         self.log_text.setMinimumHeight(200)
-        layout.addWidget(self.log_text)
+        right_layout.addWidget(self.log_text)
 
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("开始训练")
@@ -395,7 +365,7 @@ class TrainWidget(QWidget):
 
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
-        layout.addLayout(btn_layout)
+        right_layout.addLayout(btn_layout)
 
         self.results_group = QGroupBox("训练结果")
         results_layout = QVBoxLayout()
@@ -405,14 +375,33 @@ class TrainWidget(QWidget):
         results_layout.addWidget(self.result_metrics_label)
         self.results_group.setLayout(results_layout)
         self.results_group.hide()
-        layout.addWidget(self.results_group)
+        right_layout.addWidget(self.results_group)
+
+        main_layout.addWidget(right_panel, 0)
 
     def _update_model_info(self, size: str) -> None:
         self._model_info_label.setText(MODEL_INFO.get(size, ""))
 
+    def _get_project_subdir(self, subdir: str) -> str:
+        """返回工作区间下指定子目录路径,若不存在则回退到用户主目录。"""
+        if self._project_path:
+            candidate = Path(self._project_path) / subdir
+            if candidate.is_dir():
+                return str(candidate)
+        return str(Path.home())
+
     def _browse_custom_model(self) -> None:
+        from yolo26_app.core.paths import SYSTEM_MODEL_SUBDIRS
+        start_dir = str(Path.home())
+        yolo_model_dir = SYSTEM_MODEL_SUBDIRS["yolo"]
+        if yolo_model_dir.is_dir():
+            start_dir = str(yolo_model_dir)
+        elif self._project_path:
+            models_dir = Path(self._project_path) / "models"
+            if models_dir.is_dir():
+                start_dir = str(models_dir)
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择自定义模型", "", "模型文件 (*.pt *.yaml *.yml);;所有文件 (*)"
+            self, "选择自定义模型", start_dir, "模型文件 (*.pt *.yaml *.yml);;所有文件 (*)"
         )
         if path:
             self.custom_model_edit.setText(path)
@@ -566,7 +555,8 @@ class TrainWidget(QWidget):
 
     def _browse_dataset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择数据集配置文件", "", "YAML Files (*.yaml *.yml);;All Files (*)"
+            self, "选择数据集配置文件", self._get_project_subdir("datasets"),
+            "YAML Files (*.yaml *.yml);;All Files (*)"
         )
         if path:
             self.data_edit.setText(path)
@@ -759,6 +749,14 @@ class TrainWidget(QWidget):
             self.status_label.setText("正在停止训练...")
             self.stop_btn.setEnabled(False)
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._trainer is not None and self._trainer.isRunning():
+            self._on_stop()
+            self._trainer.wait(30000)
+            if self._trainer.isRunning():
+                print("警告:训练线程未在 30 秒内退出,可能仍在后台运行")
+        super().closeEvent(event)
+
     def _on_progress(self, current: int, total: int) -> None:
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
@@ -803,7 +801,13 @@ class TrainWidget(QWidget):
         self.status_label.setText("训练出错")
         QMessageBox.critical(self, "训练错误", message)
 
-    def set_project_config(self, config: ProjectConfig) -> None:
+    def set_project_config(self, config: Optional[ProjectConfig]) -> None:
+        if config is None:
+            # 自由空间模式:清空表单
+            self._project_path = ""
+            self.data_edit.setText("")
+            self.custom_model_edit.setText("")
+            return
         self._project_path = config.project_path
 
         tc = config.train_config
@@ -850,5 +854,4 @@ class TrainWidget(QWidget):
         self._apply_task_augmentation_advice()
 
         data_yaml = Path(config.project_path) / "datasets" / "data.yaml"
-        if data_yaml.exists():
-            self.data_edit.setText(str(data_yaml))
+        self.data_edit.setText(str(data_yaml) if data_yaml.exists() else "")

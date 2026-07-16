@@ -6,13 +6,14 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 from PyQt6.QtCore import QMutex, QObject, QThread, QWaitCondition, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QCloseEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -133,7 +135,9 @@ class _InferenceWorker(QThread):
         self._stop_flag = True
         self._cond.wakeOne()
         self._mutex.unlock()
-        self.wait()
+        self.wait(5000)
+        if self.isRunning():
+            print("警告:_InferenceWorker 未在 5 秒内退出,可能仍在后台运行")
         self._mutex.lock()
         self._stop_flag = False
         self._frame = None
@@ -187,20 +191,37 @@ class TestWidget(QWidget):
         self._show_depth = False
         self._batch_images: List[str] = []
         self._batch_index: int = 0
-        self._inference_worker = _InferenceWorker(self.predictor)
+        self._inference_worker = _InferenceWorker(self.predictor, parent=None)
         self._inference_worker.result_signal.connect(self._on_inference_result)
         self._last_frame: Optional[np.ndarray] = None
         self._image_predict_worker: Optional[_ImagePredictWorker] = None
         self._init_ui()
 
-    def __del__(self) -> None:
-        if self._inference_worker.isRunning():
-            self._inference_worker.stop()
-
     def _init_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left panel: controls (minimum 360px, scrollable, resizable via splitter)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setMinimumWidth(360)
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(12, 12, 12, 12)
+        left_layout.setSpacing(8)
+
+        # Right panel: results (elastic)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 12, 12, 12)
+        right_layout.setSpacing(8)
 
         model_group = QGroupBox("模型设置")
+        model_group.setObjectName("configCard")
         model_form = QFormLayout()
         model_form.setSpacing(4)
         model_group.setLayout(model_form)
@@ -265,6 +286,7 @@ class TestWidget(QWidget):
         model_form.addRow(self.load_model_btn)
 
         input_group = QGroupBox("推理输入")
+        input_group.setObjectName("configCard")
         input_layout = QHBoxLayout()
         input_group.setLayout(input_layout)
 
@@ -284,30 +306,36 @@ class TestWidget(QWidget):
         self.camera_btn.clicked.connect(self._on_open_camera)
         input_layout.addWidget(self.camera_btn)
 
-        rs_layout = QHBoxLayout()
+        realsense_group = QGroupBox("RealSense")
+        realsense_group.setObjectName("configCard")
+        rs_layout = QVBoxLayout(realsense_group)
+        rs_layout.setSpacing(4)
+
         self.rs_device_combo = QComboBox()
         self.rs_device_combo.setPlaceholderText("选择 RealSense 设备")
         self.rs_device_combo.setMinimumWidth(160)
         rs_layout.addWidget(self.rs_device_combo)
+
         self.rs_refresh_btn = QPushButton("刷新设备")
         self.rs_refresh_btn.clicked.connect(self._on_refresh_rs_devices)
         rs_layout.addWidget(self.rs_refresh_btn)
+
         self.rs_camera_btn = QPushButton("打开 RealSense")
         self.rs_camera_btn.clicked.connect(self._on_open_rs_camera)
         rs_layout.addWidget(self.rs_camera_btn)
+
         self.depth_check = QCheckBox("显示深度图")
         self.depth_check.toggled.connect(self._on_depth_check_toggled)
         rs_layout.addWidget(self.depth_check)
-        input_layout.addLayout(rs_layout)
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.clicked.connect(self._on_stop)
         self.stop_btn.setEnabled(False)
-        input_layout.addWidget(self.stop_btn)
+        rs_layout.addWidget(self.stop_btn)
 
         self.result_label = QLabel("等待推理...")
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_label.setMinimumSize(640, 480)
+        self.result_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.result_label.setStyleSheet(styles.RESULT_LABEL_STYLE)
 
         results_group = QGroupBox("结果与指标")
@@ -364,26 +392,23 @@ class TestWidget(QWidget):
         self.val_result_group.setVisible(False)
         results_layout.addWidget(self.val_result_group)
 
-        # --- QSplitter + QScrollArea 布局 ---
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(6)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
-        scroll_layout.addWidget(model_group)
-        scroll_layout.addWidget(input_group)
-        scroll_layout.addWidget(results_group)
-        scroll_layout.addStretch()
+        # --- Left panel: controls ---
+        left_layout.addWidget(model_group)
+        left_layout.addWidget(input_group)
+        left_layout.addWidget(realsense_group)
+        left_layout.addStretch()
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(scroll_content)
+        # --- Right panel: results ---
+        right_layout.addWidget(self.result_label, 1)
+        right_layout.addWidget(results_group)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(scroll_area)
-        splitter.addWidget(self.result_label)
-        splitter.setSizes([300, 450])
-
-        main_layout.addWidget(splitter)
+        left_scroll.setWidget(left_container)
+        splitter.addWidget(left_scroll)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([360, 800])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        outer_layout.addWidget(splitter)
 
     def _toggle_advanced_params(self) -> None:
         visible = self._advanced_toggle_btn.isChecked()
@@ -399,17 +424,58 @@ class TestWidget(QWidget):
             "max_det": self.max_det_spin.value(),
         }
 
-    def set_project_config(self, config: ProjectConfig) -> None:
+    def set_project_config(self, config: Optional[ProjectConfig]) -> None:
+        if config is None:
+            # 自由空间模式:清空
+            self._project_config = None
+            self.model_path_edit.setText("")
+            if hasattr(self, '_batch_images'):
+                self._batch_images = []
+            if hasattr(self, '_batch_index'):
+                self._batch_index = 0
+            if hasattr(self, 'prev_btn'):
+                self.prev_btn.setVisible(False)
+            if hasattr(self, 'next_btn'):
+                self.next_btn.setVisible(False)
+            return
         self._project_config = config
+        # 清空模型路径(无论新工作区间是否有 best.pt)
         runs_dir = Path(config.project_path) / "runs"
+        best_path = ""
         if runs_dir.exists():
             best_paths = list(runs_dir.rglob("best.pt"))
             if best_paths:
                 best_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                self.model_path_edit.setText(str(best_paths[0]))
+                best_path = str(best_paths[0])
+        self.model_path_edit.setText(best_path)
+        # 清空批量推理图片列表
+        if hasattr(self, '_batch_images'):
+            self._batch_images = []
+        if hasattr(self, '_batch_index'):
+            self._batch_index = 0
+        if hasattr(self, 'prev_btn'):
+            self.prev_btn.setVisible(False)
+        if hasattr(self, 'next_btn'):
+            self.next_btn.setVisible(False)
+
+    def _get_project_subdir(self, subdir: str) -> str:
+        """返回工作区间下指定子目录路径,若不存在则回退到用户主目录。"""
+        if self._project_config is not None:
+            candidate = Path(self._project_config.project_path) / subdir
+            if candidate.is_dir():
+                return str(candidate)
+        return str(Path.home())
 
     def _on_browse_model(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择模型文件", "", "模型文件 (*.pt *.onnx *.torchscript *.xml *.engine);;PyTorch (*.pt);;ONNX (*.onnx);;TorchScript (*.torchscript);;OpenVINO (*.xml);;TensorRT (*.engine);;所有文件 (*)")
+        start_dir = str(Path.home())
+        if self._project_config is not None:
+            models_dir = Path(self._project_config.project_path) / "models"
+            runs_dir = Path(self._project_config.project_path) / "runs"
+            if models_dir.is_dir():
+                start_dir = str(models_dir)
+            elif runs_dir.is_dir():
+                start_dir = str(runs_dir)
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型文件", start_dir, "模型文件 (*.pt *.onnx *.torchscript *.xml *.engine);;PyTorch (*.pt);;ONNX (*.onnx);;TorchScript (*.torchscript);;OpenVINO (*.xml);;TensorRT (*.engine);;所有文件 (*)")
         if path:
             self.model_path_edit.setText(path)
 
@@ -466,7 +532,7 @@ class TestWidget(QWidget):
 
     def _on_select_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择图片", "",
+            self, "选择图片", self._get_project_subdir("images"),
             "图片文件 (*.jpg *.jpeg *.png *.bmp *.tif *.tiff *.webp)"
         )
         if not path:
@@ -481,7 +547,7 @@ class TestWidget(QWidget):
         if self.predictor.model is None:
             QMessageBox.warning(self, "提示", "请先加载模型")
             return
-        dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录")
+        dir_path = QFileDialog.getExistingDirectory(self, "选择图片目录", self._get_project_subdir("images"))
         if not dir_path:
             return
         extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -566,7 +632,7 @@ class TestWidget(QWidget):
             QMessageBox.warning(self, "警告", "请先加载模型")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择视频", "",
+            self, "选择视频", self._get_project_subdir("images"),
             "视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv)"
         )
         if not path:
@@ -727,6 +793,12 @@ class TestWidget(QWidget):
         self.depth_check.setChecked(False)
         self._show_depth = False
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._on_stop()
+        if self._inference_worker is not None and self._inference_worker.isRunning():
+            self._inference_worker.wait(5000)
+        super().closeEvent(event)
+
     def _on_validate(self) -> None:
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
@@ -737,7 +809,7 @@ class TestWidget(QWidget):
             if data_yaml.exists():
                 data_path = str(data_yaml)
         if not data_path:
-            data_path, _ = QFileDialog.getOpenFileName(self, "选择数据集配置文件", "", "YAML (*.yaml *.yml)")
+            data_path, _ = QFileDialog.getOpenFileName(self, "选择数据集配置文件", self._get_project_subdir("datasets"), "YAML (*.yaml *.yml)")
         if not data_path:
             return
         self.validate_btn.setEnabled(False)

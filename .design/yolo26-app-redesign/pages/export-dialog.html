@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 App - 导出模型</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <!-- Dimmed application window behind the overlay -->
+  <div class="app-backdrop"></div>
+
+  <!-- Overlay -->
+  <div class="overlay">
+    <div class="dialog">
+      <!-- ============ Title Bar ============ -->
+      <div class="title-bar">
+        <div class="title-left">
+          <span class="title-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </span>
+          <span class="title-text">导出模型</span>
+        </div>
+        <button class="close-btn" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- ============ Dialog Body ============ -->
+      <div class="dialog-body">
+
+        <!-- ===== 任务预设 ===== -->
+        <div class="section">
+          <div class="section-header">
+            <span class="section-header-bar"></span>
+            <span class="section-title">任务预设</span>
+          </div>
+          <div class="card-grid cols-2">
+            <div class="opt-card selected">
+              <span class="radio"></span>
+              <span class="opt-label">YOLO26 Detect</span>
+            </div>
+            <div class="opt-card">
+              <span class="radio"></span>
+              <span class="opt-label">YOLO26 Pose</span>
+            </div>
+            <div class="opt-card">
+              <span class="radio"></span>
+              <span class="opt-label">YOLO26 Segment</span>
+            </div>
+            <div class="opt-card">
+              <span class="radio"></span>
+              <span class="opt-label">YOLO26 Class</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 导出格式 ===== -->
+        <div class="section">
+          <div class="section-header">
+            <span class="section-header-bar"></span>
+            <span class="section-title">导出格式</span>
+          </div>
+          <div class="card-grid cols-3">
+            <div class="opt-card compact selected">
+              <span class="radio"></span>
+              <span class="opt-label">ONNX</span>
+            </div>
+            <div class="opt-card compact">
+              <span class="radio"></span>
+              <span class="opt-label">TensorRT</span>
+            </div>
+            <div class="opt-card compact">
+              <span class="radio"></span>
+              <span class="opt-label">OpenVINO</span>
+            </div>
+            <div class="opt-card compact">
+              <span class="radio"></span>
+              <span class="opt-label">CoreML</span>
+            </div>
+            <div class="opt-card compact">
+              <span class="radio"></span>
+              <span class="opt-label">TFLite</span>
+            </div>
+            <div class="opt-card compact">
+              <span class="radio"></span>
+              <span class="opt-label">NCNN</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 导出参数 ===== -->
+        <div class="section">
+          <div class="section-header">
+            <span class="section-header-bar"></span>
+            <span class="section-title">导出参数</span>
+          </div>
+          <div class="param-list">
+            <div class="param-row">
+              <span class="param-label">图像尺寸</span>
+              <div class="dropdown">
+                <span class="dropdown-value">640</span>
+                <span class="dropdown-arrow">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </span>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">动态轴</span>
+              <div class="toggle checked"></div>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">简化模型</span>
+              <div class="toggle checked"></div>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">半精度FP16</span>
+              <div class="toggle"></div>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">INT8量化</span>
+              <div class="toggle"></div>
+            </div>
+
+            <div class="param-warning">
+              <span class="warning-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </span>
+              <span>INT8需要校准数据集</span>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">批量大小</span>
+              <div class="num-input">
+                <input type="number" value="1" min="1">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <span class="param-label">Opset版本</span>
+              <div class="dropdown">
+                <span class="dropdown-value">17</span>
+                <span class="dropdown-arrow">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ============ Footer ============ -->
+      <div class="dialog-footer">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">
+          <span class="btn-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </span>
+          确认导出
+        </button>
+      </div>
+    </div>
+  </div>
+
+    <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-crust);
+      min-height: 100vh;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ============ Dimmed application window behind ============ */
+    .app-backdrop {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 1200px;
+      height: 720px;
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      opacity: 0.55;
+      filter: blur(1px);
+    }
+
+    .app-backdrop::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 44px;
+      background: var(--color-crust);
+      border-bottom: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+
+    .app-backdrop::after {
+      content: '';
+      position: absolute;
+      top: 14px;
+      left: 16px;
+      width: 60px;
+      height: 16px;
+      background: var(--color-surface-1);
+      border-radius: var(--radius-sm);
+    }
+
+    /* ============ Overlay ============ */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+
+    /* ============ Dialog ============ */
+    .dialog {
+      width: 560px;
+      height: 640px;
+      background: var(--color-base);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-xl);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* ============ Title Bar ============ */
+    .title-bar {
+      height: 44px;
+      min-height: 44px;
+      background: var(--color-mantle);
+      border-bottom: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--space-4);
+      user-select: none;
+    }
+
+    .title-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .title-icon {
+      width: 18px;
+      height: 18px;
+      color: var(--color-primary);
+      display: flex;
+    }
+
+    .title-icon svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .title-text {
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--color-text);
+      letter-spacing: 0.3px;
+    }
+
+    .close-btn {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: background var(--transition-fast), color var(--transition-fast);
+    }
+
+    .close-btn:hover {
+      background: var(--color-danger-bg);
+      color: var(--color-danger);
+    }
+
+    .close-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* ============ Dialog Body (scrollable) ============ */
+    .dialog-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--space-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+
+    .dialog-body::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .dialog-body::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .dialog-body::-webkit-scrollbar-thumb {
+      background: var(--color-surface-1);
+      border-radius: var(--radius-sm);
+    }
+
+    .dialog-body::-webkit-scrollbar-thumb:hover {
+      background: var(--color-surface-2);
+    }
+
+    /* ============ Section Card ============ */
+    .section {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      padding: var(--space-3);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-1);
+    }
+
+    .section-header-bar {
+      width: 3px;
+      height: 14px;
+      background: var(--color-primary);
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+
+    .section-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--color-text-subtle);
+      letter-spacing: 0.5px;
+    }
+
+    /* ============ Preset / Format Card Grid ============ */
+    .card-grid {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .card-grid.cols-2 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .card-grid.cols-3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    .opt-card {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast);
+      user-select: none;
+    }
+
+    .opt-card:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+    }
+
+    .opt-card.selected {
+      background: rgba(137, 180, 250, 0.12);
+      border-color: var(--color-primary);
+    }
+
+    /* Radio indicator */
+    .radio {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid var(--color-surface-2);
+      flex-shrink: 0;
+      position: relative;
+      transition: border-color var(--transition-fast);
+    }
+
+    .opt-card.selected .radio {
+      border-color: var(--color-primary);
+    }
+
+    .opt-card.selected .radio::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--color-primary);
+    }
+
+    .opt-label {
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .opt-card.selected .opt-label {
+      color: var(--color-primary-hover);
+    }
+
+    .opt-card.compact {
+      padding: 9px var(--space-3);
+    }
+
+    .opt-card.compact .opt-label {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    /* ============ Param Form ============ */
+    .param-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      padding: 0 var(--space-1);
+    }
+
+    .param-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 28px;
+    }
+
+    .param-label {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+      font-weight: 500;
+    }
+
+    /* Dropdown */
+    .dropdown {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      height: 28px;
+      min-width: 96px;
+      padding: 0 var(--space-2) 0 var(--space-3);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-sm);
+      color: var(--color-text);
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast);
+    }
+
+    .dropdown:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+    }
+
+    .dropdown-value {
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+
+    .dropdown-arrow {
+      color: var(--color-text-muted);
+      display: flex;
+      align-items: center;
+    }
+
+    .dropdown-arrow svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Number input */
+    .num-input {
+      display: flex;
+      align-items: center;
+      height: 28px;
+      width: 96px;
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      transition: border-color var(--transition-fast);
+    }
+
+    .num-input:hover {
+      border-color: var(--color-surface-2);
+    }
+
+    .num-input input {
+      width: 100%;
+      height: 100%;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--color-text);
+      font-size: var(--font-size-sm);
+      font-family: var(--font-mono);
+      font-weight: 500;
+      text-align: center;
+      padding: 0 var(--space-2);
+    }
+
+    .num-input input::-webkit-outer-spin-button,
+    .num-input input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      width: 34px;
+      height: 18px;
+      background: var(--color-surface-1);
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+      transition: background var(--transition-fast);
+      flex-shrink: 0;
+      border: 1px solid transparent;
+    }
+
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      background: var(--color-text-subtle);
+      border-radius: 50%;
+      transition: transform var(--transition-fast), background var(--transition-fast);
+    }
+
+    .toggle.checked {
+      background: var(--color-primary);
+    }
+
+    .toggle.checked::after {
+      transform: translateX(16px);
+      background: var(--color-crust);
+    }
+
+    /* Warning label */
+    .param-warning {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 6px var(--space-3);
+      background: var(--color-warning-bg);
+      border: 1px solid rgba(249, 226, 175, 0.2);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-xs);
+      color: var(--color-warning);
+      font-weight: 500;
+    }
+
+    .warning-icon {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .warning-icon svg {
+      width: 13px;
+      height: 13px;
+    }
+
+    /* ============ Footer ============ */
+    .dialog-footer {
+      height: 60px;
+      min-height: 60px;
+      background: var(--color-mantle);
+      border-top: 1px solid var(--color-surface-0);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-3);
+      padding: 0 var(--space-4);
+    }
+
+    .btn {
+      height: 34px;
+      padding: 0 var(--space-5);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-sm);
+      font-weight: 500;
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-family: var(--font-sans);
+    }
+
+    .btn-secondary {
+      background: var(--color-surface-0);
+      border-color: var(--color-surface-1);
+      color: var(--color-text-subtle);
+    }
+
+    .btn-secondary:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+      color: var(--color-text);
+    }
+
+    .btn-primary {
+      background: var(--color-primary);
+      color: var(--color-crust);
+      font-weight: 700;
+      border-color: var(--color-primary);
+    }
+
+    .btn-primary:hover {
+      background: var(--color-primary-hover);
+      border-color: var(--color-primary-hover);
+    }
+
+    .btn-primary:active {
+      transform: translateY(1px);
+    }
+
+    .btn-icon svg {
+      width: 14px;
+      height: 14px;
+    }
+  </style>
+</body>
+</html>

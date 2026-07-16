@@ -10,6 +10,7 @@ CACHE_DIR = Path.home() / ".yolo26_app"
 CACHE_FILE = CACHE_DIR / "gpu_cache.json"
 STATE_FILE = CACHE_DIR / "app_state.json"
 CACHE_TTL = 1800
+TIMEOUT_CACHE_TTL = 60
 
 
 def _cuda_check_worker(result_queue: multiprocessing.Queue) -> None:
@@ -24,18 +25,22 @@ def _cuda_check_worker(result_queue: multiprocessing.Queue) -> None:
         result_queue.put(("error", str(e)))
 
 
-def detect_gpu_subprocess(timeout: float = 5.0) -> Tuple[str, str]:
-    result_queue = multiprocessing.Queue()
-    proc = multiprocessing.Process(target=_cuda_check_worker, args=(result_queue,))
-    proc.start()
-    proc.join(timeout=timeout)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(timeout=1.0)
-        return ("timeout", "")
-    if not result_queue.empty():
-        return result_queue.get()
-    return ("cpu", "")
+def detect_gpu_subprocess(timeout: float = 10.0) -> Tuple[str, str]:
+    for attempt in range(2):
+        result_queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(target=_cuda_check_worker, args=(result_queue,))
+        proc.start()
+        proc.join(timeout=timeout)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=1.0)
+            if attempt == 0:
+                continue
+            return ("timeout", "")
+        if not result_queue.empty():
+            return result_queue.get()
+        return ("cpu", "")
+    return ("timeout", "")
 
 
 def load_gpu_cache() -> Optional[Tuple[str, str]]:
@@ -47,10 +52,11 @@ def load_gpu_cache() -> Optional[Tuple[str, str]]:
     except (json.JSONDecodeError, OSError):
         return None
     ts = data.get("timestamp", 0)
-    if time.time() - ts > CACHE_TTL:
-        return None
     status = data.get("status", "cpu")
     name = data.get("device_name", "")
+    ttl = TIMEOUT_CACHE_TTL if status == "timeout" else CACHE_TTL
+    if time.time() - ts > ttl:
+        return None
     return (status, name)
 
 
@@ -99,7 +105,7 @@ def save_exit_flag(normal: bool) -> None:
 class GPUDetectWorker(QThread):
     result_ready = pyqtSignal(str, str)
 
-    def __init__(self, parent=None, timeout: float = 5.0) -> None:
+    def __init__(self, parent=None, timeout: float = 10.0) -> None:
         super().__init__(parent)
         self.timeout = timeout
 

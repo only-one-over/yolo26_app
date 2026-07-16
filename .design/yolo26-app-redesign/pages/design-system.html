@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 App 设计系统</title>
+    <style id="theme-vars">
+:root {
+  /* Background layers */
+  --color-base: #1e1e2e;
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-surface-0: #313244;
+  --color-surface-1: #45475a;
+  --color-surface-2: #585b70;
+
+  /* Text */
+  --color-text: #cdd6f4;
+  --color-text-subtle: #a6adc8;
+  --color-text-muted: #7f849c;
+
+  /* Accent colors */
+  --color-primary: #89b4fa;
+  --color-primary-hover: #b4befe;
+  --color-success: #a6e3a1;
+  --color-success-bg: #1e3a2e;
+  --color-warning: #f9e2af;
+  --color-warning-bg: #3a3520;
+  --color-danger: #f38ba8;
+  --color-danger-bg: #3a1e2a;
+
+  /* Fonts */
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-primary: var(--color-primary);
+  }
+  @layer base {
+    body { background: var(--color-surface); color: var(--color-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ============ Header ============ -->
+    <header class="page-header">
+      <div>
+        <h1>YOLO26 App 设计系统</h1>
+        <div class="subtitle">Catppuccin Mocha 主题 · 2025 重构版</div>
+      </div>
+      <div class="header-badge">
+        <span class="dot"></span>
+        <span>v2.6.0 · Mocha Dark</span>
+      </div>
+    </header>
+
+    <!-- ============ 配色色板 ============ -->
+    <section class="section">
+      <div class="section-title">配色色板</div>
+      <div class="section-desc">基础背景、文本与强调色 token 全集，所有界面颜色均取自此处。</div>
+      <div class="color-grid">
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-base);"></div>
+          <div class="color-meta">
+            <div class="color-name">Base</div>
+            <div class="color-hex">#1e1e2e</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-mantle);"></div>
+          <div class="color-meta">
+            <div class="color-name">Mantle</div>
+            <div class="color-hex">#181825</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-crust);"></div>
+          <div class="color-meta">
+            <div class="color-name">Crust</div>
+            <div class="color-hex">#11111b</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-surface-0);"></div>
+          <div class="color-meta">
+            <div class="color-name">Surface 0</div>
+            <div class="color-hex">#313244</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-surface-1);"></div>
+          <div class="color-meta">
+            <div class="color-name">Surface 1</div>
+            <div class="color-hex">#45475a</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-surface-2);"></div>
+          <div class="color-meta">
+            <div class="color-name">Surface 2</div>
+            <div class="color-hex">#585b70</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-text);"></div>
+          <div class="color-meta">
+            <div class="color-name">Text</div>
+            <div class="color-hex">#cdd6f4</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-text-subtle);"></div>
+          <div class="color-meta">
+            <div class="color-name">Text Subtle</div>
+            <div class="color-hex">#a6adc8</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-text-muted);"></div>
+          <div class="color-meta">
+            <div class="color-name">Text Muted</div>
+            <div class="color-hex">#7f849c</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-primary);"></div>
+          <div class="color-meta">
+            <div class="color-name">Primary</div>
+            <div class="color-hex">#89b4fa</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-success);"></div>
+          <div class="color-meta">
+            <div class="color-name">Success</div>
+            <div class="color-hex">#a6e3a1</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-warning);"></div>
+          <div class="color-meta">
+            <div class="color-name">Warning</div>
+            <div class="color-hex">#f9e2af</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-danger);"></div>
+          <div class="color-meta">
+            <div class="color-name">Danger</div>
+            <div class="color-hex">#f38ba8</div>
+          </div>
+        </div>
+        <div class="color-card">
+          <div class="color-swatch" style="background: var(--color-primary-hover);"></div>
+          <div class="color-meta">
+            <div class="color-name">Primary Hover</div>
+            <div class="color-hex">#b4befe</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 字体样式 ============ -->
+    <section class="section">
+      <div class="section-title">字体样式</div>
+      <div class="section-desc">无衬线字体 Segoe UI 用于界面正文，等宽字体 JetBrains Mono 用于数据与代码。</div>
+
+      <div class="type-block">
+        <div class="type-label">
+          <span class="name">Sans-serif</span>
+          <span class="family">"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif</span>
+        </div>
+        <div class="type-samples" style="font-family: var(--font-sans);">
+          <div class="type-sample">
+            <div class="meta">xs · 11px</div>
+            <div class="text" style="font-size: var(--font-size-xs);">界面标注</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">sm · 12px</div>
+            <div class="text" style="font-size: var(--font-size-sm);">辅助说明</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">base · 13px</div>
+            <div class="text" style="font-size: var(--font-size-base);">正文内容</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">md · 14px</div>
+            <div class="text" style="font-size: var(--font-size-md);">列表标题</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">lg · 16px</div>
+            <div class="text" style="font-size: var(--font-size-lg);">卡片标题</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">xl · 20px</div>
+            <div class="text" style="font-size: var(--font-size-xl);">区块标题</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">2xl · 24px</div>
+            <div class="text" style="font-size: var(--font-size-2xl);">页面标题</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="type-block">
+        <div class="type-label">
+          <span class="name">Monospace</span>
+          <span class="family">"JetBrains Mono", "Cascadia Code", "Consolas", monospace</span>
+        </div>
+        <div class="type-samples" style="font-family: var(--font-mono);">
+          <div class="type-sample">
+            <div class="meta">xs · 11px</div>
+            <div class="text" style="font-size: var(--font-size-xs);">0.847</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">sm · 12px</div>
+            <div class="text" style="font-size: var(--font-size-sm);">#89b4fa</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">base · 13px</div>
+            <div class="text" style="font-size: var(--font-size-base);">epoch_42</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">md · 14px</div>
+            <div class="text" style="font-size: var(--font-size-md);">mAP@0.5</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">lg · 16px</div>
+            <div class="text" style="font-size: var(--font-size-lg);">1280x720</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">xl · 20px</div>
+            <div class="text" style="font-size: var(--font-size-xl);">yolov26</div>
+          </div>
+          <div class="type-sample">
+            <div class="meta">2xl · 24px</div>
+            <div class="text" style="font-size: var(--font-size-2xl);">2025.07</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 间距标尺 ============ -->
+    <section class="section">
+      <div class="section-title">间距标尺</div>
+      <div class="section-desc">基于 4px 基准的间距阶梯，用于内边距、外边距与组件间距。</div>
+      <div class="spacing-list">
+        <div class="spacing-row">
+          <div class="spacing-label">space-1</div>
+          <div class="spacing-bar" style="width: 4px;"></div>
+          <div class="spacing-value">4px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-2</div>
+          <div class="spacing-bar" style="width: 8px;"></div>
+          <div class="spacing-value">8px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-3</div>
+          <div class="spacing-bar" style="width: 12px;"></div>
+          <div class="spacing-value">12px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-4</div>
+          <div class="spacing-bar" style="width: 16px;"></div>
+          <div class="spacing-value">16px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-5</div>
+          <div class="spacing-bar" style="width: 20px;"></div>
+          <div class="spacing-value">20px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-6</div>
+          <div class="spacing-bar" style="width: 24px;"></div>
+          <div class="spacing-value">24px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-8</div>
+          <div class="spacing-bar" style="width: 32px;"></div>
+          <div class="spacing-value">32px</div>
+        </div>
+        <div class="spacing-row">
+          <div class="spacing-label">space-10</div>
+          <div class="spacing-bar" style="width: 40px;"></div>
+          <div class="spacing-value">40px</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 圆角级别 ============ -->
+    <section class="section">
+      <div class="section-title">圆角级别</div>
+      <div class="section-desc">四级圆角 token，适用于按钮、输入框、卡片等不同层级的容器。</div>
+      <div class="radius-grid">
+        <div class="radius-card">
+          <div class="radius-shape" style="border-radius: var(--radius-sm);"></div>
+          <div class="radius-name">Small</div>
+          <div class="radius-value">radius-sm · 4px</div>
+        </div>
+        <div class="radius-card">
+          <div class="radius-shape" style="border-radius: var(--radius-md);"></div>
+          <div class="radius-name">Medium</div>
+          <div class="radius-value">radius-md · 6px</div>
+        </div>
+        <div class="radius-card">
+          <div class="radius-shape" style="border-radius: var(--radius-lg);"></div>
+          <div class="radius-name">Large</div>
+          <div class="radius-value">radius-lg · 8px</div>
+        </div>
+        <div class="radius-card">
+          <div class="radius-shape" style="border-radius: var(--radius-xl);"></div>
+          <div class="radius-name">Extra Large</div>
+          <div class="radius-value">radius-xl · 12px</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 组件预览 ============ -->
+    <section class="section">
+      <div class="section-title">组件预览</div>
+      <div class="section-desc">PyQt6 桌面端常用组件状态与样式参考。</div>
+
+      <div class="component-grid">
+
+        <!-- 按钮状态 -->
+        <div class="component-card">
+          <div class="component-title">按钮状态</div>
+          <div class="component-row">
+            <div class="row-label">default</div>
+            <div class="row-items">
+              <button class="btn">默认</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">hover</div>
+            <div class="row-items">
+              <button class="btn" style="background: var(--color-surface-1); border-color: var(--color-surface-2);">悬停</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">pressed</div>
+            <div class="row-items">
+              <button class="btn pressed">按下</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">disabled</div>
+            <div class="row-items">
+              <button class="btn disabled">禁用</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">checked</div>
+            <div class="row-items">
+              <button class="btn checked">选中</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 强调按钮 -->
+        <div class="component-card">
+          <div class="component-title">强调按钮</div>
+          <div class="component-row">
+            <div class="row-label">primary</div>
+            <div class="row-items">
+              <button class="btn btn-primary">开始训练</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">success</div>
+            <div class="row-items">
+              <button class="btn btn-success">导出模型</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">danger</div>
+            <div class="row-items">
+              <button class="btn btn-danger">删除数据集</button>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">组合</div>
+            <div class="row-items">
+              <button class="btn">取消</button>
+              <button class="btn btn-primary">确认</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 输入框 -->
+        <div class="component-card">
+          <div class="component-title">输入控件</div>
+          <div class="component-row">
+            <div class="row-label">text</div>
+            <div class="row-items">
+              <div class="input">
+                <span>coco2017</span>
+                <span class="caret"></span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">placeholder</div>
+            <div class="row-items">
+              <div class="input">
+                <span class="placeholder">请输入数据集名称…</span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">focused</div>
+            <div class="row-items">
+              <div class="input focused">
+                <span>yolov26n</span>
+                <span class="caret"></span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">dropdown</div>
+            <div class="row-items">
+              <div class="dropdown">
+                <span>YOLOv26n</span>
+                <span class="arrow"></span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">spinner</div>
+            <div class="row-items">
+              <div class="input-with-spinner">
+                <div class="spinner"></div>
+                <span class="text-muted">加载中…</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 选择控件 -->
+        <div class="component-card">
+          <div class="component-title">选择控件</div>
+          <div class="component-row">
+            <div class="row-label">checkbox</div>
+            <div class="row-items">
+              <label class="checkbox checked"><span class="box"></span>启用自动保存</label>
+              <label class="checkbox"><span class="box"></span>混合精度训练</label>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">radio</div>
+            <div class="row-items">
+              <label class="radio checked"><span class="circle"></span>GPU 训练</label>
+              <label class="radio"><span class="circle"></span>CPU 训练</label>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">switch</div>
+            <div class="row-items">
+              <label class="checkbox checked"><span class="box"></span>显示检测框</label>
+              <label class="checkbox"><span class="box"></span>显示置信度</label>
+              <label class="checkbox checked"><span class="box"></span>显示标签</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="component-card">
+          <div class="component-title">进度条</div>
+          <div class="progress-label">
+            <span>训练进度</span>
+            <span>50%</span>
+          </div>
+          <div class="progress">
+            <div class="fill"></div>
+          </div>
+          <div class="progress-label" style="margin-top: 18px;">
+            <span>epoch 50 / 100</span>
+            <span>loss: 0.342</span>
+          </div>
+          <div class="progress">
+            <div class="fill" style="width: 50%; background: linear-gradient(90deg, var(--color-success), #c4f0c0);"></div>
+          </div>
+        </div>
+
+        <!-- 分组容器 -->
+        <div class="component-card">
+          <div class="component-title">分组容器</div>
+          <div class="group-box">
+            <div class="group-box-title">训练参数</div>
+            <div class="group-box-content">
+              <div class="component-row" style="margin-bottom: 0;">
+                <div class="row-label">epochs</div>
+                <div class="row-items">
+                  <div class="input" style="width: 120px;"><span>100</span></div>
+                </div>
+              </div>
+              <div class="component-row" style="margin-bottom: 0;">
+                <div class="row-label">batch</div>
+                <div class="row-items">
+                  <div class="input" style="width: 120px;"><span>16</span></div>
+                </div>
+              </div>
+              <div class="component-row" style="margin-bottom: 0;">
+                <div class="row-label">lr</div>
+                <div class="row-items">
+                  <div class="input" style="width: 120px;"><span>0.001</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 导航按钮 -->
+        <div class="component-card">
+          <div class="component-title">导航按钮</div>
+          <div class="component-row">
+            <div class="row-label">selected</div>
+            <div class="row-items">
+              <div class="nav-button selected" style="position: relative;">
+                <span class="nav-icon icon-grid"></span>
+                <span>数据集</span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">default</div>
+            <div class="row-items">
+              <div class="nav-button">
+                <span class="nav-icon icon-layers"></span>
+                <span>模型</span>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">hover</div>
+            <div class="row-items">
+              <div class="nav-button" style="background: var(--color-surface-0); color: var(--color-text);">
+                <span class="nav-icon icon-settings"></span>
+                <span>设置</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 工具栏按钮组 -->
+        <div class="component-card">
+          <div class="component-title">工具栏按钮组</div>
+          <div class="component-row">
+            <div class="row-label">group</div>
+            <div class="row-items">
+              <div class="toolbar">
+                <button class="toolbar-btn active"><span class="glyph">B</span></button>
+                <button class="toolbar-btn"><span class="glyph" style="font-style: italic;">I</span></button>
+                <button class="toolbar-btn"><span class="glyph" style="text-decoration: underline;">U</span></button>
+                <div class="toolbar-sep"></div>
+                <button class="toolbar-btn"><span class="glyph">L</span></button>
+                <button class="toolbar-btn"><span class="glyph">C</span></button>
+                <button class="toolbar-btn"><span class="glyph">R</span></button>
+                <div class="toolbar-sep"></div>
+                <button class="toolbar-btn"><span class="glyph">+</span></button>
+                <button class="toolbar-btn"><span class="glyph">−</span></button>
+              </div>
+            </div>
+          </div>
+          <div class="component-row">
+            <div class="row-label">icon</div>
+            <div class="row-items">
+              <div class="toolbar">
+                <button class="toolbar-btn active"><span class="glyph">▸</span></button>
+                <button class="toolbar-btn"><span class="glyph">■</span></button>
+                <button class="toolbar-btn"><span class="glyph">↻</span></button>
+                <div class="toolbar-sep"></div>
+                <button class="toolbar-btn"><span class="glyph">⤓</span></button>
+                <button class="toolbar-btn"><span class="glyph">⤒</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ============ Footer ============ -->
+    <footer class="page-footer">
+      <div>YOLO26 App · 设计系统文档 · PyQt6 Desktop UI</div>
+      <div class="tokens">
+        <span>14 colors</span>
+        <span>7 type sizes</span>
+        <span>8 spacing</span>
+        <span>4 radius</span>
+      </div>
+    </footer>
+
+  </div>
+
+    <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      background: var(--color-base);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-base);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      width: 1440px;
+      min-height: 900px;
+      margin: 0 auto;
+      padding: 48px 56px 72px;
+      background: var(--color-base);
+    }
+
+    /* ============ Header ============ */
+    .page-header {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--color-surface-0);
+      margin-bottom: 40px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+
+    .page-header h1 {
+      font-size: var(--font-size-2xl);
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--color-text);
+    }
+
+    .page-header .subtitle {
+      font-size: var(--font-size-md);
+      color: var(--color-text-muted);
+      margin-top: 6px;
+      letter-spacing: 0.3px;
+    }
+
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+    }
+
+    .header-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 8px var(--color-success);
+    }
+
+    /* ============ Section ============ */
+    .section {
+      margin-bottom: 48px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 20px;
+      letter-spacing: 0.3px;
+    }
+
+    .section-title::before {
+      content: "";
+      width: 4px;
+      height: 18px;
+      background: var(--color-primary);
+      border-radius: 2px;
+    }
+
+    .section-desc {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-muted);
+      margin-bottom: 20px;
+      margin-left: 16px;
+    }
+
+    /* ============ Color Palette ============ */
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 14px;
+    }
+
+    .color-card {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: transform var(--transition-normal), border-color var(--transition-normal);
+    }
+
+    .color-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--color-surface-2);
+    }
+
+    .color-swatch {
+      height: 72px;
+      border-bottom: 1px solid var(--color-surface-0);
+    }
+
+    .color-meta {
+      padding: 10px 12px 12px;
+    }
+
+    .color-name {
+      font-size: var(--font-size-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      margin-bottom: 2px;
+    }
+
+    .color-hex {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      letter-spacing: 0.3px;
+    }
+
+    /* ============ Typography ============ */
+    .type-block {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--color-radius-lg, var(--radius-lg));
+      padding: 24px 28px;
+      margin-bottom: 16px;
+    }
+
+    .type-label {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--color-surface-0);
+    }
+
+    .type-label .name {
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .type-label .family {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+    }
+
+    .type-samples {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 16px;
+    }
+
+    .type-sample {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .type-sample .meta {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--color-text-muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .type-sample .text {
+      color: var(--color-text);
+      line-height: 1.3;
+    }
+
+    /* ============ Spacing ============ */
+    .spacing-list {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      padding: 22px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .spacing-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .spacing-label {
+      width: 110px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      color: var(--color-text-subtle);
+    }
+
+    .spacing-bar {
+      height: 16px;
+      background: var(--color-primary);
+      border-radius: var(--radius-sm);
+      opacity: 0.85;
+    }
+
+    .spacing-value {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      width: 56px;
+    }
+
+    /* ============ Radius ============ */
+    .radius-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .radius-card {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      text-align: center;
+    }
+
+    .radius-shape {
+      width: 100%;
+      height: 80px;
+      background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
+      margin-bottom: 14px;
+    }
+
+    .radius-name {
+      font-size: var(--font-size-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      margin-bottom: 2px;
+    }
+
+    .radius-value {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+    }
+
+    /* ============ Components ============ */
+    .component-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .component-card {
+      background: var(--color-mantle);
+      border: 1px solid var(--color-surface-0);
+      border-radius: var(--radius-lg);
+      padding: 22px 24px;
+    }
+
+    .component-card.full {
+      grid-column: 1 / -1;
+    }
+
+    .component-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--color-surface-0);
+    }
+
+    .component-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .component-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .row-label {
+      width: 90px;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .row-items {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    /* ============ Buttons ============ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      font-family: var(--font-sans);
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      background: var(--color-surface-0);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      line-height: 1;
+      user-select: none;
+    }
+
+    .btn:hover {
+      background: var(--color-surface-1);
+      border-color: var(--color-surface-2);
+    }
+
+    .btn.pressed {
+      background: var(--color-surface-2);
+      border-color: var(--color-surface-2);
+      transform: translateY(1px);
+    }
+
+    .btn.disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn.checked {
+      background: var(--color-primary);
+      border-color: var(--color-primary-hover);
+      color: var(--color-base);
+      font-weight: 500;
+    }
+
+    .btn-primary {
+      background: var(--color-primary);
+      border-color: var(--color-primary-hover);
+      color: var(--color-base);
+      font-weight: 500;
+    }
+
+    .btn-primary:hover {
+      background: var(--color-primary-hover);
+    }
+
+    .btn-success {
+      background: var(--color-success);
+      border-color: var(--color-success);
+      color: var(--color-base);
+      font-weight: 500;
+    }
+
+    .btn-success:hover {
+      filter: brightness(1.08);
+    }
+
+    .btn-danger {
+      background: var(--color-danger);
+      border-color: var(--color-danger);
+      color: var(--color-base);
+      font-weight: 500;
+    }
+
+    .btn-danger:hover {
+      filter: brightness(1.08);
+    }
+
+    /* ============ Inputs ============ */
+    .input {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      width: 200px;
+      font-family: var(--font-sans);
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      transition: border-color var(--transition-fast);
+    }
+
+    .input.focused {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.15);
+    }
+
+    .input .placeholder {
+      color: var(--color-text-muted);
+    }
+
+    .input .caret {
+      width: 1px;
+      height: 14px;
+      background: var(--color-primary);
+      animation: blink 1s steps(2) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .dropdown {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      width: 200px;
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
+    .dropdown .arrow {
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--color-text-muted);
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--color-surface-1);
+      border-top-color: var(--color-primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .input-with-spinner {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      width: 200px;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+    }
+
+    .input-with-spinner .text-muted {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-base);
+    }
+
+    /* ============ Checkbox & Radio ============ */
+    .checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .checkbox .box {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--color-surface-2);
+      border-radius: var(--radius-sm);
+      background: var(--color-crust);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-fast);
+    }
+
+    .checkbox.checked .box {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+
+    .checkbox.checked .box::after {
+      content: "";
+      width: 4px;
+      height: 8px;
+      border: solid var(--color-base);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg) translate(-1px, -1px);
+    }
+
+    .radio {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .radio .circle {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--color-surface-2);
+      border-radius: 50%;
+      background: var(--color-crust);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-fast);
+    }
+
+    .radio.checked .circle {
+      border-color: var(--color-primary);
+    }
+
+    .radio.checked .circle::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      background: var(--color-primary);
+      border-radius: 50%;
+    }
+
+    /* ============ Progress ============ */
+    .progress {
+      width: 100%;
+      height: 8px;
+      background: var(--color-surface-0);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .progress .fill {
+      width: 50%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--color-primary), var(--color-primary-hover));
+      border-radius: var(--radius-sm);
+      transition: width var(--transition-normal);
+    }
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+      margin-bottom: 8px;
+    }
+
+    /* ============ Group Box ============ */
+    .group-box {
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      background: var(--color-crust);
+    }
+
+    .group-box-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--color-text-subtle);
+      margin-bottom: 14px;
+      letter-spacing: 0.5px;
+    }
+
+    .group-box-content {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* ============ Nav Button ============ */
+    .nav-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      width: 180px;
+      font-size: var(--font-size-base);
+      color: var(--color-text-subtle);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .nav-button:hover {
+      background: var(--color-surface-0);
+      color: var(--color-text);
+    }
+
+    .nav-button.selected {
+      background: var(--color-surface-0);
+      color: var(--color-primary);
+      border-color: var(--color-surface-1);
+    }
+
+    .nav-button.selected::before {
+      content: "";
+      width: 3px;
+      height: 16px;
+      background: var(--color-primary);
+      border-radius: 2px;
+      position: absolute;
+      margin-left: -18px;
+    }
+
+    .nav-icon {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .nav-icon.icon-grid {
+      background:
+        linear-gradient(var(--color-text-subtle), var(--color-text-subtle)) 0 0 / 7px 7px no-repeat,
+        linear-gradient(var(--color-text-subtle), var(--color-text-subtle)) 11px 0 / 7px 7px no-repeat,
+        linear-gradient(var(--color-text-subtle), var(--color-text-subtle)) 0 11px / 7px 7px no-repeat,
+        linear-gradient(var(--color-text-subtle), var(--color-text-subtle)) 11px 11px / 7px 7px no-repeat;
+    }
+
+    .nav-button.selected .nav-icon.icon-grid,
+    .nav-button:hover .nav-icon.icon-grid {
+      background:
+        linear-gradient(currentColor, currentColor) 0 0 / 7px 7px no-repeat,
+        linear-gradient(currentColor, currentColor) 11px 0 / 7px 7px no-repeat,
+        linear-gradient(currentColor, currentColor) 0 11px / 7px 7px no-repeat,
+        linear-gradient(currentColor, currentColor) 11px 11px / 7px 7px no-repeat;
+    }
+
+    .nav-icon.icon-layers {
+      background:
+        linear-gradient(currentColor, currentColor) 0 12px / 18px 2px no-repeat,
+        linear-gradient(currentColor, currentColor) 2px 8px / 14px 2px no-repeat,
+        linear-gradient(currentColor, currentColor) 4px 4px / 10px 2px no-repeat;
+    }
+
+    .nav-icon.icon-settings {
+      width: 18px;
+      height: 18px;
+      border: 2px solid currentColor;
+      border-radius: 50%;
+      position: relative;
+    }
+
+    .nav-icon.icon-settings::after {
+      content: "";
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      background: var(--color-crust);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    /* ============ Toolbar ============ */
+    .toolbar {
+      display: inline-flex;
+      align-items: center;
+      background: var(--color-crust);
+      border: 1px solid var(--color-surface-1);
+      border-radius: var(--radius-md);
+      padding: 4px;
+      gap: 2px;
+    }
+
+    .toolbar-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-subtle);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .toolbar-btn:hover {
+      background: var(--color-surface-0);
+      color: var(--color-text);
+    }
+
+    .toolbar-btn.active {
+      background: var(--color-surface-1);
+      color: var(--color-primary);
+    }
+
+    .toolbar-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--color-surface-1);
+      margin: 0 4px;
+    }
+
+    .toolbar-icon {
+      width: 14px;
+      height: 14px;
+      display: inline-block;
+    }
+
+    .ti-bold {
+      background: currentColor;
+      width: 12px;
+      height: 10px;
+      -webkit-mask: linear-gradient(currentColor, currentColor);
+    }
+
+    .ti-bold::before {
+      content: "B";
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 14px;
+    }
+
+    .toolbar-btn .glyph {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    /* ============ Footer ============ */
+    .page-footer {
+      margin-top: 56px;
+      padding-top: 24px;
+      border-top: 1px solid var(--color-surface-0);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .page-footer .tokens {
+      display: flex;
+      gap: 18px;
+    }
+  </style>
+</body>
+</html>
