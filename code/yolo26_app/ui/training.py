@@ -3,6 +3,11 @@ from pathlib import Path
 from typing import List, Optional
 
 import yaml
+try:
+    import pyqtgraph
+    _PYQTGRAPH_AVAILABLE = True
+except ImportError:
+    _PYQTGRAPH_AVAILABLE = False
 
 from PyQt6.QtWidgets import (
     QWidget,
@@ -23,11 +28,13 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QCheckBox,
     QFrame,
+    QTabWidget,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QCloseEvent
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QCloseEvent, QPixmap
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig, normalize_augmentation_preset
+from yolo26_app.core.logger import get_logger
 from yolo26_app.core.model_registry import (
     MODEL_FAMILY_TASK_MODEL_MAP,
     AUGMENTATION_PRESET_LABELS,
@@ -37,6 +44,8 @@ from yolo26_app.core.model_registry import (
 )
 from yolo26_app.core.trainer import YOLOTrainer
 from yolo26_app.ui import styles
+
+logger = get_logger(__name__)
 
 MODEL_FAMILY_MAP = {
     "YOLO26": "yolo26",
@@ -59,12 +68,47 @@ TASK_INFO = {
 }
 
 
+def parse_results_csv(csv_path: Path) -> dict:
+    """解析 Ultralytics results.csv,返回 {列名: [值]} 字典。跳过空行与不完整行。"""
+    import csv as _csv
+    if not csv_path.exists():
+        return {}
+    columns: dict = {}
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = _csv.DictReader(_csv.reader(f))
+            # Ultralytics 的 CSV 表头可能包含前导空格(如 " train/box_loss"),需 strip
+            fieldnames = [fn.strip() for fn in reader.fieldnames or []]
+            for fn in fieldnames:
+                columns[fn] = []
+            for row in reader:
+                # 检查行是否完整(所有字段都有值且可转 float)
+                try:
+                    parsed_row = {}
+                    for fn in fieldnames:
+                        val = (row.get(fn) or "").strip()
+                        if not val:
+                            raise ValueError("incomplete row")
+                        parsed_row[fn] = float(val)
+                    for fn, v in parsed_row.items():
+                        columns[fn].append(v)
+                except (ValueError, TypeError):
+                    continue
+    except (OSError, _csv.Error):
+        return {}
+    return columns
+
+
 class TrainWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._trainer: Optional[YOLOTrainer] = None
         self._project_path: str = ""
         self._setup_ui()
+        self._csv_timer = QTimer(self)
+        self._csv_timer.setInterval(5000)
+        self._csv_timer.timeout.connect(self._refresh_curves)
+        self._current_save_dir: Optional[Path] = None
 
     def _setup_ui(self) -> None:
         main_layout = QHBoxLayout(self)
@@ -367,6 +411,68 @@ class TrainWidget(QWidget):
         btn_layout.addWidget(self.stop_btn)
         right_layout.addLayout(btn_layout)
 
+        # ===== 训练曲线可视化面板 =====
+        self.curves_tab = QTabWidget(self)
+        self.curves_tab.setMinimumHeight(350)
+
+        # Loss 标签页
+        if _PYQTGRAPH_AVAILABLE:
+            self.loss_plot = pyqtgraph.PlotWidget(self)
+            self.loss_plot.setLabel("left", "loss")
+            self.loss_plot.setLabel("bottom", "epoch")
+            self.loss_plot.addLegend()
+            self.loss_plot.showGrid(x=True, y=True, alpha=0.3)
+            self.curves_tab.addTab(self.loss_plot, "Loss 曲线")
+        else:
+            self.loss_plot = None
+            loss_placeholder = QLabel("请安装 pyqtgraph 以启用训练曲线:\n  pip install pyqtgraph")
+            loss_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.curves_tab.addTab(loss_placeholder, "Loss 曲线")
+
+        # mAP 标签页
+        if _PYQTGRAPH_AVAILABLE:
+            self.map_plot = pyqtgraph.PlotWidget(self)
+            self.map_plot.setLabel("left", "mAP")
+            self.map_plot.setLabel("bottom", "epoch")
+            self.map_plot.addLegend()
+            self.map_plot.showGrid(x=True, y=True, alpha=0.3)
+            self.curves_tab.addTab(self.map_plot, "mAP 曲线")
+        else:
+            self.map_plot = None
+            map_placeholder = QLabel("请安装 pyqtgraph 以启用训练曲线:\n  pip install pyqtgraph")
+            map_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.curves_tab.addTab(map_placeholder, "mAP 曲线")
+
+        # PR/F1/P/R 标签页
+        pr_scroll = QScrollArea(self)
+        pr_scroll.setWidgetResizable(True)
+        pr_container = QWidget()
+        pr_layout = QVBoxLayout(pr_container)
+        self.pr_label = QLabel("训练完成后显示 PR 曲线")
+        self.f1_label = QLabel("训练完成后显示 F1 曲线")
+        self.p_label = QLabel("训练完成后显示 P 曲线")
+        self.r_label = QLabel("训练完成后显示 R 曲线")
+        for lbl in (self.pr_label, self.f1_label, self.p_label, self.r_label):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pr_layout.addWidget(lbl)
+        pr_scroll.setWidget(pr_container)
+        self.curves_tab.addTab(pr_scroll, "PR / F1 / P / R")
+
+        # 混淆矩阵标签页
+        cm_scroll = QScrollArea(self)
+        cm_scroll.setWidgetResizable(True)
+        cm_container = QWidget()
+        cm_layout = QVBoxLayout(cm_container)
+        self.cm_label = QLabel("训练完成后显示混淆矩阵")
+        self.cm_norm_label = QLabel("训练完成后显示归一化混淆矩阵")
+        for lbl in (self.cm_label, self.cm_norm_label):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cm_layout.addWidget(lbl)
+        cm_scroll.setWidget(cm_container)
+        self.curves_tab.addTab(cm_scroll, "混淆矩阵")
+
+        right_layout.addWidget(self.curves_tab)
+
         self.results_group = QGroupBox("训练结果")
         results_layout = QVBoxLayout()
         self.result_model_label = QLabel("最佳模型: -")
@@ -376,6 +482,11 @@ class TrainWidget(QWidget):
         self.results_group.setLayout(results_layout)
         self.results_group.hide()
         right_layout.addWidget(self.results_group)
+
+        # 打开 runs 目录按钮
+        self.open_runs_btn = QPushButton("打开 runs 目录", self)
+        self.open_runs_btn.clicked.connect(self._on_open_runs)
+        right_layout.addWidget(self.open_runs_btn)
 
         main_layout.addWidget(right_panel, 0)
 
@@ -741,6 +852,10 @@ class TrainWidget(QWidget):
         self.stop_btn.setEnabled(True)
         self._set_form_enabled(False)
 
+        save_dir = Path(self._project_path) / "runs" / (config.name or "train")
+        self._current_save_dir = save_dir
+        self._csv_timer.start()
+
         self._trainer.start()
 
     def _on_stop(self) -> None:
@@ -750,11 +865,12 @@ class TrainWidget(QWidget):
             self.stop_btn.setEnabled(False)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._csv_timer.stop()
         if self._trainer is not None and self._trainer.isRunning():
             self._on_stop()
             self._trainer.wait(30000)
             if self._trainer.isRunning():
-                print("警告:训练线程未在 30 秒内退出,可能仍在后台运行")
+                logger.warning("警告:训练线程未在 30 秒内退出,可能仍在后台运行")
         super().closeEvent(event)
 
     def _on_progress(self, current: int, total: int) -> None:
@@ -767,7 +883,41 @@ class TrainWidget(QWidget):
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _refresh_curves(self) -> None:
+        if not _PYQTGRAPH_AVAILABLE:
+            return
+        if self._current_save_dir is None:
+            return
+        csv_path = self._current_save_dir / "results.csv"
+        columns = parse_results_csv(csv_path)
+        if not columns:
+            return
+        epochs = columns.get("epoch", list(range(1, len(next(iter(columns.values()))) + 1)))
+        # Loss 曲线
+        self.loss_plot.clear()
+        loss_columns = [
+            ("train/box_loss", "train/box", "#1f77b4"),
+            ("train/cls_loss", "train/cls", "#ff7f0e"),
+            ("train/seg_loss", "train/seg", "#2ca02c"),
+            ("val/box_loss", "val/box", "#d62728"),
+            ("val/cls_loss", "val/cls", "#9467bd"),
+            ("val/seg_loss", "val/seg", "#8c564b"),
+        ]
+        for col_name, legend_name, color in loss_columns:
+            if col_name in columns:
+                self.loss_plot.plot(epochs, columns[col_name], pen=pyqtgraph.mkPen(color, width=2), name=legend_name)
+        # mAP 曲线
+        self.map_plot.clear()
+        map_columns = [
+            ("metrics/mAP50(B)", "mAP50", "#1f77b4"),
+            ("metrics/mAP50-95(B)", "mAP50-95", "#ff7f0e"),
+        ]
+        for col_name, legend_name, color in map_columns:
+            if col_name in columns:
+                self.map_plot.plot(epochs, columns[col_name], pen=pyqtgraph.mkPen(color, width=2), name=legend_name)
+
     def _on_finished(self, message: str) -> None:
+        self._csv_timer.stop()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._set_form_enabled(True)
@@ -794,12 +944,55 @@ class TrainWidget(QWidget):
 
         self.results_group.show()
 
+        # 加载 PNG 图表
+        if self._current_save_dir is not None:
+            save_dir = self._current_save_dir
+            # PR/F1/P/R
+            png_map = [
+                (self.pr_label, "PR_curve.png", "PR 曲线"),
+                (self.f1_label, "F1_curve.png", "F1 曲线"),
+                (self.p_label, "P_curve.png", "P 曲线"),
+                (self.r_label, "R_curve.png", "R 曲线"),
+                (self.cm_label, "confusion_matrix.png", "混淆矩阵"),
+                (self.cm_norm_label, "confusion_matrix_normalized.png", "归一化混淆矩阵"),
+            ]
+            for label, filename, default_text in png_map:
+                png_path = save_dir / filename
+                if png_path.exists():
+                    pixmap = QPixmap(str(png_path))
+                    if not pixmap.isNull():
+                        # 缩放以适应标签宽度(保持比例)
+                        scaled = pixmap.scaledToWidth(
+                            max(label.width(), 600),
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        label.setPixmap(scaled)
+                    else:
+                        label.setText(f"{default_text} - 图表加载失败")
+                else:
+                    label.setText(f"无此图表: {filename}")
+            # 最终刷新一次曲线
+            self._refresh_curves()
+
     def _on_error(self, message: str) -> None:
+        self._csv_timer.stop()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._set_form_enabled(True)
         self.status_label.setText("训练出错")
         QMessageBox.critical(self, "训练错误", message)
+
+    def _on_open_runs(self) -> None:
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl
+        if not self._project_path:
+            QMessageBox.information(self, "提示", "请先选择项目")
+            return
+        runs_dir = Path(self._project_path) / "runs"
+        if not runs_dir.exists():
+            QMessageBox.information(self, "提示", "暂无训练记录")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(runs_dir)))
 
     def set_project_config(self, config: Optional[ProjectConfig]) -> None:
         if config is None:

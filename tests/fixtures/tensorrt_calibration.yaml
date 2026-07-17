@@ -1,5 +1,0 @@
-path: .
-train: images
-val: images
-names:
-  0: target

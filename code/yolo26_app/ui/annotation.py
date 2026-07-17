@@ -1,10 +1,12 @@
 import json
 import os
+import shutil
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
@@ -44,14 +46,19 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QLineEdit,
     QAbstractSpinBox,
+    QCheckBox,
+    QDoubleSpinBox,
 )
 
 from yolo26_app.core.annotation_canvas import AnnotationScene, AnnotationView, AnnotationItem
 from yolo26_app.core.config import ClassItem, ProjectConfig
 from yolo26_app.core.label_manager import LabelManager
+from yolo26_app.core.logger import get_logger
 from yolo26_app.core.persistence import write_json_atomic
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui import styles
+
+logger = get_logger(__name__)
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -273,6 +280,109 @@ class _BatchDetectWorker(QThread):
         self._stop_flag = True
 
 
+class _YoloSamBatchWorker(QThread):
+    """YOLO + SAM2 串联批量标注 worker:YOLO 预测 bbox → SAM2 用 box prompt 生成 mask → 转 polygon"""
+    progress_signal = pyqtSignal(int, int)
+    done_signal = pyqtSignal(dict, int)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, image_list, yolo_annotator, sam_predictor, conf):
+        super().__init__()
+        self._image_list = image_list
+        self._yolo_annotator = yolo_annotator
+        self._sam_predictor = sam_predictor
+        self._conf = conf
+        self._stop_flag = False
+
+    def run(self):
+        results_dict: Dict[str, List[AnnotationItem]] = {}
+        total = len(self._image_list)
+        # 显存优化:CUDA 可用时用 bfloat16 autocast 包裹 SAM2 调用
+        use_autocast = False
+        try:
+            import torch
+            use_autocast = torch.cuda.is_available()
+        except ImportError:
+            pass
+        ctx = torch.autocast("cuda", dtype=torch.bfloat16) if use_autocast else nullcontext()
+        try:
+            for i, img_path in enumerate(self._image_list):
+                if self._stop_flag:
+                    break
+                try:
+                    image = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if image is None:
+                        logger.warning(f"YOLO+SAM2 批量:图片读取失败,跳过 {img_path}")
+                        continue
+                    # YOLO 预测
+                    predict_kwargs = dict(source=image, conf=self._conf, verbose=False)
+                    model = self._yolo_annotator._model
+                    results = model.predict(**predict_kwargs)
+                    if not results:
+                        continue
+                    result = results[0]
+                    if result.boxes is None or len(result.boxes) == 0:
+                        continue
+                    boxes_xyxy = result.boxes.xyxy.cpu().numpy()  # (N, 4)
+                    classes = result.boxes.cls.cpu().numpy()  # (N,)
+                    # SAM2 set_image 每图一次
+                    with ctx:
+                        self._sam_predictor.set_image(image)
+                    anns: List[AnnotationItem] = []
+                    h, w = image.shape[:2]
+                    for box, cls in zip(boxes_xyxy, classes):
+                        if self._stop_flag:
+                            break
+                        try:
+                            with ctx:
+                                masks, scores, logits = self._sam_predictor.predict(
+                                    box=box,
+                                    multimask_output=False,
+                                )
+                            mask = masks[0]
+                            if mask is None:
+                                continue
+                            mask_u8 = (mask.astype(np.uint8)) * 255
+                            # mask 尺寸可能与原图不一致(SAM2 内部 resize),对齐到原图
+                            if mask_u8.shape[:2] != (h, w):
+                                mask_u8 = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
+                            contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if not contours:
+                                continue
+                            # 取最大轮廓
+                            contour = max(contours, key=cv2.contourArea)
+                            # 简化 polygon
+                            epsilon = 0.002 * cv2.arcLength(contour, True)
+                            approx = cv2.approxPolyDP(contour, epsilon, True)
+                            pts = approx.reshape(-1, 2)
+                            if len(pts) < 3:
+                                continue  # 至少 3 点才能构成 polygon
+                            if len(pts) > 200:
+                                logger.warning(f"YOLO+SAM2 批量:polygon 简化后点数 {len(pts)} > 200,跳过该标注 {img_path}")
+                                continue
+                            polygon = QPolygonF([QPointF(float(p[0]), float(p[1])) for p in pts])
+                            anns.append(AnnotationItem(
+                                class_index=int(cls),
+                                polygon=polygon,
+                                item_type="polygon",
+                            ))
+                        except Exception as e:
+                            logger.warning(f"YOLO+SAM2 批量:单 bbox 处理失败,跳过 {img_path}: {e}")
+                            continue
+                    if anns:
+                        results_dict[img_path] = anns
+                except Exception as e:
+                    logger.warning(f"YOLO+SAM2 批量:单图处理失败,跳过 {img_path}: {e}")
+                    continue
+                self.progress_signal.emit(i + 1, total)
+            self.done_signal.emit(results_dict, total)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+    def stop(self):
+        self._stop_flag = True
+
+
 class _DinoWorker(QThread):
     done_signal = pyqtSignal(list)
     error_signal = pyqtSignal(str)
@@ -331,6 +441,7 @@ class AnnotateWidget(QWidget):
         self._sam_encoding = False
         self._sam_worker = None
         self._batch_worker = None
+        self._yolo_sam_worker: Optional[_YoloSamBatchWorker] = None
         self._batch_progress = None
         self._dino_worker = None
         self._thumb_worker: Optional[_ThumbnailWorker] = None
@@ -372,7 +483,7 @@ class AnnotateWidget(QWidget):
                     self._sam_worker.disconnect()
                 except (RuntimeError, TypeError):
                     pass
-                print("警告: SAM encode worker 5 秒内未退出,已断开信号连接")
+                logger.warning("警告: SAM encode worker 5 秒内未退出,已断开信号连接")
         import cv2
         image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
@@ -410,7 +521,7 @@ class AnnotateWidget(QWidget):
                     self._sam_worker.disconnect()
                 except (RuntimeError, TypeError):
                     pass
-                print("警告: SAM predict worker 5 秒内未退出,已断开信号连接")
+                logger.warning("警告: SAM predict worker 5 秒内未退出,已断开信号连接")
         self._sam_worker = _SamWorker(
             self._sam_annotator._predictor,
             task="predict",
@@ -625,10 +736,15 @@ class AnnotateWidget(QWidget):
         self._class_list_widget.currentRowChanged.connect(self._on_class_selected)
         self._scene.annotations_changed.connect(self._on_annotations_changed)
 
-        self._next_image_shortcut = QShortcut(QKeySequence("Space"), self)
+        self._next_image_shortcut = QShortcut(QKeySequence("Shift+Space"), self)
         self._next_image_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._next_image_shortcut.setAutoRepeat(False)
         self._next_image_shortcut.activated.connect(self._go_to_next_image)
+
+        self._delete_shortcut = QShortcut(QKeySequence("Space"), self)
+        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._delete_shortcut.setAutoRepeat(False)
+        self._delete_shortcut.activated.connect(self._delete_selected)
 
     def _on_annotations_changed(self) -> None:
         self._save_current_annotations()
@@ -655,7 +771,7 @@ class AnnotateWidget(QWidget):
                             self._sam_worker.disconnect()
                         except (RuntimeError, TypeError):
                             pass
-                        print("警告: SAM worker 5 秒内未退出,已断开信号连接")
+                        logger.warning("警告: SAM worker 5 秒内未退出,已断开信号连接")
             except RuntimeError:
                 pass
             self._sam_worker = None
@@ -669,10 +785,24 @@ class AnnotateWidget(QWidget):
                             self._batch_worker.disconnect()
                         except (RuntimeError, TypeError):
                             pass
-                        print("警告: 批量检测 worker 5 秒内未退出,已断开信号连接")
+                        logger.warning("警告: 批量检测 worker 5 秒内未退出,已断开信号连接")
             except RuntimeError:
                 pass
             self._batch_worker = None
+        if self._yolo_sam_worker is not None:
+            try:
+                self._yolo_sam_worker.stop()
+                if self._yolo_sam_worker.isRunning():
+                    self._yolo_sam_worker.wait(5000)
+                    if self._yolo_sam_worker.isRunning():
+                        try:
+                            self._yolo_sam_worker.disconnect()
+                        except (RuntimeError, TypeError):
+                            pass
+                        logger.warning("警告: YOLO+SAM2 worker 5 秒内未退出,已断开信号连接")
+            except RuntimeError:
+                pass
+            self._yolo_sam_worker = None
 
     def _go_to_next_image(self) -> None:
         if QApplication.activeModalWidget() is not None:
@@ -1125,7 +1255,7 @@ class AnnotateWidget(QWidget):
         self._current_pixmap_item = None
         self._scene.clear()
         self._scene.setSceneRect(QRectF())
-        self._schedule_autosave()
+        self._save_annotations_to_project(force=True)
 
     def _add_class(self) -> None:
         dialog = QDialog(self)
@@ -1391,25 +1521,61 @@ class AnnotateWidget(QWidget):
         if not self._image_list:
             QMessageBox.warning(self, "提示", "请先导入图片")
             return
-        conf, ok = QInputDialog.getDouble(self, "逐帧检测", "置信度阈值:", 0.25, 0.01, 1.0, 2)
-        if not ok:
+        # 自定义对话框:置信度 + SAM2 复选框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("批量检测")
+        form = QFormLayout(dialog)
+        conf_spin = QDoubleSpinBox(dialog)
+        conf_spin.setRange(0.01, 1.0)
+        conf_spin.setSingleStep(0.05)
+        conf_spin.setValue(0.25)
+        conf_spin.setDecimals(2)
+        sam_check = QCheckBox("使用 SAM2 生成精确掩码(polygon)", dialog)
+        sam_check.setChecked(False)
+        form.addRow("置信度阈值:", conf_spin)
+        form.addRow(sam_check)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dialog
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        form.addRow(button_box)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        conf = conf_spin.value()
+        use_sam = sam_check.isChecked()
+        # SAM2 就绪性校验
+        sam_predictor = None
+        if use_sam:
+            sam_annotator = self._get_sam_annotator()
+            if not sam_annotator.available:
+                QMessageBox.warning(self, "SAM2 未安装", "请先安装 SAM 2:\n  pip install sam2\n并在标注区加载 SAM2 模型")
+                return
+            if sam_annotator._predictor is None:
+                QMessageBox.warning(self, "SAM2 未加载", "请先在标注区点击 SAM 分割按钮加载 SAM2 模型")
+                return
+            sam_predictor = sam_annotator._predictor
         total = len(self._image_list)
         progress = QProgressDialog("正在处理图片...", "取消", 0, total, self)
-        progress.setWindowTitle("逐帧检测")
+        progress.setWindowTitle("YOLO+SAM2 批量标注" if use_sam else "逐帧检测")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         self._batch_progress = progress
-        self._batch_worker = _BatchDetectWorker(self._image_list, yolo, conf)
-        self._batch_worker.progress_signal.connect(progress.setValue)
-        self._batch_worker.done_signal.connect(self._on_batch_done)
-        self._batch_worker.error_signal.connect(
+        if use_sam:
+            self._yolo_sam_worker = _YoloSamBatchWorker(self._image_list, yolo, sam_predictor, conf)
+            worker = self._yolo_sam_worker
+        else:
+            self._batch_worker = _BatchDetectWorker(self._image_list, yolo, conf)
+            worker = self._batch_worker
+        worker.progress_signal.connect(progress.setValue)
+        worker.done_signal.connect(self._on_batch_done)
+        worker.error_signal.connect(
             lambda msg: QMessageBox.critical(self, "错误", msg)
         )
-        progress.canceled.connect(self._batch_worker.stop)
-        self._batch_worker.start()
-        self._batch_worker.finished.connect(self._batch_worker.deleteLater)
-        self._batch_worker.finished.connect(lambda: setattr(self, '_batch_worker', None))
+        progress.canceled.connect(worker.stop)
+        worker.start()
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_batch_worker_finished)
 
     def _on_batch_done(self, results_dict: dict, total: int) -> None:
         if self._batch_progress is not None:
@@ -1430,6 +1596,11 @@ class AnnotateWidget(QWidget):
             self, "逐帧检测完成",
             f"共处理 {total} 张图片\n检测到目标: {detected_count} 张"
         )
+
+    def _on_batch_worker_finished(self) -> None:
+        """批量检测 worker 完成时清理引用,避免 Python/C++ 对象生命周期不同步。"""
+        self._batch_worker = None
+        self._yolo_sam_worker = None
 
     def _generate_default_dataset_name(self, datasets_dir: Path) -> str:
         """扫描 datasets 目录,生成不冲突的 dataset1/dataset2/... 默认名称。"""
@@ -1630,14 +1801,14 @@ class AnnotateWidget(QWidget):
         if current_path in self._image_list:
             self._image_list_widget.setCurrentRow(self._image_list.index(current_path))
 
-    def _save_annotations_to_project(self) -> bool:
+    def _save_annotations_to_project(self, force: bool = False) -> bool:
         window = self.window()
         if not hasattr(window, "current_project_config"):
             return False
         config = window.current_project_config
         if config is None:
             return False
-        if not self._annotations_dict and not self._image_list:
+        if not force and not self._annotations_dict and not self._image_list:
             return False
         project_path = config.project_path
         serialized: Dict[str, list] = {}
@@ -1661,6 +1832,13 @@ class AnnotateWidget(QWidget):
             "current_image_path": os.path.relpath(self._current_image_path, project_path) if self._current_image_path and os.path.isabs(self._current_image_path) else self._current_image_path,
         }
         annotations_path = ProjectManager.get_annotations_path(config)
+        # 备份上一版 annotations.json 为 annotations.bak.json
+        try:
+            if annotations_path.exists():
+                bak_path = annotations_path.with_name("annotations.bak.json")
+                shutil.copy2(annotations_path, bak_path)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"备份 annotations.bak.json 失败: {e}")
         try:
             write_json_atomic(annotations_path, data)
             return True

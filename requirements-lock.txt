@@ -1,0 +1,46 @@
+# YOLO26 App 锁定版依赖清单(经过完整测试的稳定版本组合)
+# Python: 3.10 / 3.11
+# 使用方式:pip install -r requirements-lock.txt
+#
+# ===== PyTorch(需先单独安装,见下方 GPU/CPU 索引说明) =====
+# PyTorch 不在此文件中固定版本,因其需要根据 CUDA 版本选择对应索引 URL
+# 请先按下方说明安装 PyTorch,再执行本文件安装其他依赖
+#
+# GPU 版(CUDA 12.1,推荐):
+#   pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# GPU 版(CUDA 11.8):
+#   pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu118
+#
+# GPU 版(CUDA 12.4):
+#   pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu124
+#
+# CPU 版(无 GPU):
+#   pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cpu
+
+# ===== 核心依赖(锁定版本) =====
+ultralytics==8.3.20
+PyQt6==6.7.1
+opencv-python==4.10.0.84
+numpy==1.26.4
+pyyaml==6.0.1
+pyqtgraph==0.13.7
+
+# ===== ONNX Runtime(二选一) =====
+# GPU 推理(CUDA 12.x):
+onnxruntime-gpu==1.18.1
+# CPU 推理(若不使用 GPU):
+# onnxruntime==1.18.1
+
+# ===== 可选依赖(锁定版本,按需启用) =====
+# SAM 2:
+# sam2 @ git+https://github.com/facebookresearch/segment-anything-2.git
+#
+# Grounding DINO:
+# groundingdino-pip==0.4.0
+#
+# Intel RealSense:
+# pyrealsense2==2.55.10.1359
+#
+# TensorRT 10.x(需 CUDA 12.x + Ultralytics ≥ 8.3.0):
+# tensorrt==10.2.0

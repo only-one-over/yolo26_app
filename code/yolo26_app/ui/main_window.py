@@ -1,4 +1,10 @@
 import json
+import os
+import platform
+import subprocess
+import sys
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
@@ -28,6 +34,7 @@ from PyQt6.QtCore import Qt, QSize, QTimer, QPoint
 from PyQt6.QtGui import QAction, QCloseEvent, QIcon, QGuiApplication
 
 from yolo26_app.core.config import ProjectConfig
+from yolo26_app.core.logger import get_logger
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui.styles import DARK_STYLE, get_style
 from yolo26_app.core.persistence import write_json_atomic
@@ -40,6 +47,8 @@ if TYPE_CHECKING:
 
 APP_STATE_DIR = Path.home() / ".yolo26_app"
 APP_STATE_FILE = APP_STATE_DIR / "app_state.json"
+
+logger = get_logger(__name__)
 
 
 class NewProjectDialog(QDialog):
@@ -119,7 +128,10 @@ class MainWindow(QMainWindow):
         self._recovery_save_timer.setSingleShot(True)
         self._recovery_save_timer.setInterval(0)
         self._recovery_save_timer.timeout.connect(self._save_app_state)
+        self._env_checked = False
         QTimer.singleShot(25, self._finish_startup)
+        # 延迟 2 秒执行环境自检，避免阻塞启动
+        QTimer.singleShot(2000, self._check_common_environment_issues)
 
     def _load_nav_icon(self, name: str) -> QIcon:
         """Load a navigation icon from the icons directory."""
@@ -346,6 +358,13 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助(&H)")
+
+        export_diag_action = QAction("导出诊断报告(&D)", self)
+        export_diag_action.triggered.connect(self._export_diagnostic_report)
+        help_menu.addAction(export_diag_action)
 
     def _init_statusbar(self) -> None:
         self.statusbar = QStatusBar()
@@ -764,3 +783,186 @@ class MainWindow(QMainWindow):
         while f"project{i}" in existing:
             i += 1
         return f"project{i}"
+
+    def _export_diagnostic_report(self) -> None:
+        """导出诊断报告：打包系统信息、GPU 状态与最近 7 天日志为 zip。"""
+        try:
+            # 收集系统信息
+            info = {
+                "timestamp": datetime.now().isoformat(),
+                "os": platform.platform(),
+                "python": sys.version,
+                "pyqt6": __import__("PyQt6").QtCore.PYQT_VERSION_STR
+                if hasattr(__import__("PyQt6"), "QtCore")
+                else "unknown",
+                "opencv": __import__("cv2").__version__,
+                "numpy": __import__("numpy").__version__,
+            }
+            # 尝试收集可选依赖
+            try:
+                import torch
+
+                info["torch"] = torch.__version__
+                info["cuda_available"] = torch.cuda.is_available()
+                info["cuda_device"] = (
+                    torch.cuda.get_device_name(0)
+                    if torch.cuda.is_available()
+                    else "N/A"
+                )
+            except ImportError:
+                info["torch"] = "not installed"
+            try:
+                info["ultralytics"] = __import__("ultralytics").__version__
+            except ImportError:
+                info["ultralytics"] = "not installed"
+            try:
+                info["tensorrt"] = __import__("tensorrt").__version__
+            except ImportError:
+                info["tensorrt"] = "not installed"
+            try:
+                from importlib.metadata import version as _pkg_version
+                try:
+                    info["onnxruntime"] = _pkg_version("onnxruntime")
+                except Exception:
+                    info["onnxruntime"] = getattr(
+                        __import__("onnxruntime"), "__version__", "unknown"
+                    )
+            except ImportError:
+                info["onnxruntime"] = "not installed"
+
+            # 收集 GPU 状态（优先读取缓存，无缓存则运行时检测）
+            try:
+                from yolo26_app.core.gpu_detector import load_gpu_cache
+
+                gpu_cache = load_gpu_cache()
+                if gpu_cache is not None:
+                    info["gpu_status"], info["gpu_device"] = gpu_cache
+                else:
+                    info["gpu_status"] = "unknown"
+                    info["gpu_device"] = ""
+            except Exception as e:
+                info["gpu_status"] = f"error: {e}"
+                info["gpu_device"] = ""
+
+            # 选择保存路径
+            from yolo26_app.core.paths import WORKSPACE_ROOT
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_name = f"diagnostic_report_{ts}.zip"
+            if self.current_project_config is not None:
+                default_dir = str(self.current_project_config.project_path)
+            else:
+                default_dir = str(WORKSPACE_ROOT / "my_project")
+            default_path = os.path.join(default_dir, default_name)
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "保存诊断报告", default_path, "Zip 文件 (*.zip)"
+            )
+            if not save_path:
+                return
+
+            # 写入 system_info.json 并打包日志
+            logs_dir = WORKSPACE_ROOT / "logs"
+            info_json = json.dumps(info, indent=2, ensure_ascii=False)
+            with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("system_info.json", info_json.encode("utf-8"))
+                if logs_dir.exists():
+                    for log_file in logs_dir.glob("app.log*"):
+                        if log_file.is_file():
+                            zf.write(log_file, arcname=log_file.name)
+                    for log_file in logs_dir.glob("crash_*.log"):
+                        if log_file.is_file():
+                            zf.write(log_file, arcname=log_file.name)
+
+            logger.info("诊断报告已导出: %s", save_path)
+            QMessageBox.information(
+                self, "导出成功", f"诊断报告已导出:\n{save_path}"
+            )
+        except Exception as e:
+            logger.exception("导出诊断报告失败")
+            QMessageBox.warning(self, "导出失败", f"导出诊断报告时出错:\n{e}")
+
+    def _check_common_environment_issues(self) -> None:
+        """启动后检测常见环境问题并弹窗给出修复命令。
+
+        通过 ``self._env_checked`` 标志避免重复弹窗。
+        """
+        if self._env_checked:
+            return
+        self._env_checked = True
+
+        issues: List[Tuple[str, str]] = []
+
+        # 检测 1：CUDA 不可用但有 NVIDIA GPU
+        try:
+            import torch
+
+            cuda_available = torch.cuda.is_available()
+            nvidia_smi_ok = (
+                subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0
+            )
+            if not cuda_available and nvidia_smi_ok:
+                issues.append(
+                    (
+                        "PyTorch GPU 不可用",
+                        "检测到 NVIDIA GPU 但 PyTorch 不可用 GPU 加速。\n\n"
+                        "请重新安装 CUDA 版 PyTorch:\n"
+                        "pip install torch torchvision --index-url "
+                        "https://download.pytorch.org/whl/cu121\n\n"
+                        "或参考 README 中的 GPU 安装步骤。",
+                    )
+                )
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("CUDA 检测异常: %s", e)
+
+        # 检测 2：TensorRT 与 Ultralytics 版本不匹配
+        try:
+            import tensorrt
+            import ultralytics
+
+            trt_major = int(tensorrt.__version__.split(".")[0])
+            ultra_minor = int(ultralytics.__version__.split(".")[1])
+            if trt_major >= 10 and ultra_minor < 3:
+                issues.append(
+                    (
+                        "TensorRT 版本不匹配",
+                        f"TensorRT {tensorrt.__version__} 需 Ultralytics ≥ 8.3.0"
+                        f"(当前 {ultralytics.__version__})。\n\n"
+                        "请升级 Ultralytics:\n"
+                        "pip install -U ultralytics",
+                    )
+                )
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("TensorRT 版本检测异常: %s", e)
+
+        # 检测 3：onnxruntime 与 onnxruntime-gpu 同时安装
+        try:
+            import importlib.metadata as md
+
+            installed = [d.metadata["Name"].lower() for d in md.distributions()]
+            if "onnxruntime" in installed and "onnxruntime-gpu" in installed:
+                issues.append(
+                    (
+                        "ONNX Runtime 冲突",
+                        "检测到 onnxruntime 与 onnxruntime-gpu 同时安装,会产生冲突。\n\n"
+                        "请卸载其一:\n"
+                        "pip uninstall onnxruntime onnxruntime-gpu\n"
+                        "pip install onnxruntime-gpu  # 或 onnxruntime(CPU 版)",
+                    )
+                )
+        except Exception:
+            pass
+
+        if not issues:
+            return
+
+        # 记录每个 issue 并合并为一个对话框弹出
+        for title, message in issues:
+            logger.warning("环境问题:%s - %s", title, message.replace("\n", " | "))
+        combined = "\n\n".join(
+            f"【{title}】\n{message}" for title, message in issues
+        )
+        QMessageBox.warning(self, "环境问题检测", combined)

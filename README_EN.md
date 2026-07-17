@@ -39,6 +39,35 @@
 - Video file (MP4/AVI etc., auto-extract frames)
 - Entire directory (batch import)
 
+### YOLO + SAM2 Batch Auto-Annotation Pipeline
+
+Use case: You already have a YOLO detect model + a large number of unlabeled images (common in industrial scenarios). Manual annotation of tens of thousands of images takes dozens of hours; this pipeline compresses it to a few hours.
+
+**Workflow**:
+1. Load a YOLO detect model on the Test page
+2. Click the "SAM Segmentation" button in the annotation area to load a SAM2 model
+3. Import images to be annotated
+4. Click the "Batch Detect" toolbar button
+5. In the dialog:
+   - Set confidence threshold (default 0.25)
+   - **Check "Use SAM2 to generate precise masks (polygon)"**
+6. Click OK and wait for batch processing (progress dialog is cancelable)
+7. Manually review the few incorrect annotations
+8. Export a YOLO segmentation dataset
+
+**Prerequisites**:
+- A loaded YOLO model (detect or segm both work)
+- A loaded SAM2 model (requires `pip install sam2` and downloading a SAM2 checkpoint first)
+
+**Output**: polygon annotations, directly exportable as a YOLO segmentation dataset.
+
+**Notes**:
+- When the SAM2 checkbox is unchecked, behavior is identical to the original "Batch Detect" (pure YOLO, only rects or segm-model masks)
+- When checked: YOLO predicts bbox → SAM2 uses bbox as a box prompt to generate a mask → simplified to polygon (max 200 points to avoid file bloat)
+- Images with no YOLO detections automatically skip SAM2 encoding (saves VRAM)
+- A single bbox failure does not interrupt the whole batch; it is skipped with a warning
+- Mid-batch cancellation is supported; partial results for already-processed images are preserved
+
 ### 📦 Dataset Export
 
 | Feature | Description |
@@ -97,6 +126,19 @@ output_dir/
 | `optimizer` | auto | Optimizer: auto/SGD/Adam/AdamW |
 | `lr0` | 0.01 | Initial learning rate |
 | `patience` | 100 | Early stopping patience (0=off) |
+
+#### 📈 Training Curves Visualization
+
+The training interface has a built-in training curve visualization panel — no need to manually open TensorBoard or the runs directory:
+
+- **Real-time updates during training** (polls `results.csv` every 5 seconds):
+  - Loss curves: `train/box_loss`, `train/cls_loss`, `train/seg_loss` (seg task), `val/box_loss`, `val/cls_loss`, `val/seg_loss`
+  - mAP curves: `mAP50`, `mAP50-95`
+- **Auto-loaded after training completes**:
+  - PR / F1 / P / R curves (`PR_curve.png`, `F1_curve.png`, `P_curve.png`, `R_curve.png`)
+  - Confusion matrix (`confusion_matrix.png`, `confusion_matrix_normalized.png`)
+- **Open runs directory**: one click to open the `runs/` directory in the system file manager for full charts and weight files
+- Depends on `pyqtgraph` (included in core dependencies)
 
 ### 🔍 Inference & Testing
 
@@ -211,9 +253,22 @@ conda activate yolo26
 
 **3. Install Dependencies**
 
+**Option A: Basic Install (Recommended for Beginners)**
+
 ```bash
 pip install -r requirements.txt
 ```
+
+**Option B: Locked Version Install (Recommended for Production, Versions Verified Compatible)**
+
+```bash
+# Install PyTorch first (choose based on your CUDA version, see below)
+pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+# Then install the rest of the locked dependencies
+pip install -r requirements-lock.txt
+```
+
+Locked version combination: Python 3.10 + PyTorch 2.3.1 + CUDA 12.1 + Ultralytics 8.3.20 + TensorRT 10.2.0 + PyQt6 6.7.1 + OpenCV 4.10.0.84 + ONNX Runtime 1.18.1.
 
 **4. Install PyTorch (GPU Support)**
 
@@ -240,14 +295,20 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 **5. Optional Dependencies**
 
 ```bash
-# Intel RealSense depth camera
-pip install pyrealsense2
+# Intel RealSense depth camera support
+pip install -e ".[realsense]"
 
-# SAM 2 segmentation
-pip install sam2
+# SAM 2 segmentation support
+pip install -e ".[sam]"
 
-# Grounding DINO text detection
-pip install groundingdino
+# Grounding DINO support
+pip install -e ".[dino]"
+
+# TensorRT ultra-fast GPU inference (requires Ultralytics ≥ 8.3.0)
+pip install -e ".[tensorrt]"
+
+# All optional dependencies
+pip install -e ".[all]"
 ```
 
 **6. Launch App**
@@ -314,9 +375,11 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 | Bounding Box | Drag to draw | — |
 | Polygon | Click points, double-click to finish | — |
 | Select | Click to select | — |
-| Delete | Delete selected | Delete |
+| Delete | Delete selected via Delete or Space | Delete / Space |
 | Undo | Undo last action | Ctrl+Z |
 | Redo | Redo undone action | Ctrl+Shift+Z |
+| Previous | Switch to previous image | ↑ |
+| Next | Switch to next image | ↓ or Shift+Space |
 
 #### Step 5: Assisted Annotation (Optional)
 
@@ -577,6 +640,29 @@ val: images/val
 nc: 2
 names: ['person', 'car']
 ```
+
+---
+
+## 🔍 Diagnostics & Troubleshooting
+
+### Log Location
+
+Application runtime logs are automatically written to the `logs/` folder in the project root:
+- `logs/app_YYYYMMDD.log` — daily rotation, retained for 7 days
+- `logs/crash_YYYYMMDD_HHMMSS.log` — crash log (auto-generated when the program exits abnormally)
+
+### Export Diagnostic Report
+
+When you encounter an issue and need to report it, you can export a diagnostic report in one click:
+
+1. Menu bar → Help → Export Diagnostic Report
+2. Choose a save path (default: `my_project/<workspace>/diagnostic_report_YYYYMMDD_HHMMSS.zip`)
+3. The report includes:
+   - System information (OS, Python, PyQt6, OpenCV, PyTorch, CUDA, Ultralytics, TensorRT versions)
+   - GPU status
+   - Logs from the last 7 days
+
+The diagnostic report can be attached directly to an Issue, helping developers quickly locate the problem.
 
 ---
 

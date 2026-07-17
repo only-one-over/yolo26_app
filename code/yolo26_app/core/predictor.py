@@ -7,7 +7,11 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from yolo26_app.core.logger import get_logger
+
 _TENSORRT_BUILDER_FLAG_ALIASES = (("FP16", "kFP16"), ("INT8", "kINT8"), ("TF32", "kTF32"))
+
+logger = get_logger(__name__)
 
 
 class YOLOPredictor:
@@ -126,7 +130,7 @@ class YOLOPredictor:
 
     def export_model(self, format: str, output_dir: str, **kwargs) -> Tuple[str, bool, str]:
         """Export model to specified format.
-        
+
         Returns:
             Tuple of (path, success, error_message).
             - path: The exported model path
@@ -140,34 +144,95 @@ class YOLOPredictor:
         if export_format == "engine":
             self._validate_tensorrt_environment(export_kwargs)
 
-        try:
-            exported_path = self.model.export(format=export_format, **export_kwargs)
-        except AttributeError as exc:
-            msg = str(exc)
-            if "BuilderFlag" in msg or "tensorrt_bindings" in msg:
-                raise RuntimeError(
-                    "TensorRT 导出失败：当前 ultralytics 与 TensorRT 版本不兼容"
-                    f"（{msg}）。建议升级 ultralytics（pip install -U ultralytics）"
-                    "或降级 TensorRT 至 8.x。"
-                ) from exc
-            raise
-        exported_path = str(exported_path)
+        # 预测最终输出路径 final_path
+        src_dir = os.path.dirname(self.model_path)
+        src_stem = os.path.splitext(os.path.basename(self.model_path))[0]
+        predicted_name = src_stem + "." + export_format
         if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            dest = os.path.join(output_dir, os.path.basename(exported_path))
-            dest = self._unique_path(dest)
-            shutil.move(exported_path, dest)
+            final_path = os.path.join(output_dir, predicted_name)
         else:
-            dest = exported_path
-        if export_format in {"onnx", "engine"}:
-            verify_device = export_kwargs.get("device", "") if export_format == "engine" else ""
-            success, error_msg = self._verify_exported_model(
-                dest,
-                imgsz=export_kwargs.get("imgsz", 640),
-                device=str(verify_device),
-            )
-            return dest, success, error_msg
-        return dest, True, ""
+            final_path = os.path.join(src_dir, predicted_name)
+
+        logger.info("准备导出模型到: %s (格式: %s)", final_path, export_format)
+
+        # 备份现有 final_path(若存在)
+        bak_path = final_path + ".bak"
+        has_backup = False
+        if os.path.exists(final_path):
+            try:
+                shutil.move(final_path, bak_path)
+                has_backup = True
+                logger.info("已备份现有导出文件: %s -> %s", final_path, bak_path)
+            except Exception as e:
+                logger.warning("备份现有导出文件失败: %s", e)
+        else:
+            logger.info("导出前 %s 不存在,跳过备份", final_path)
+
+        export_success = False
+        try:
+            try:
+                exported_path = self.model.export(format=export_format, **export_kwargs)
+            except AttributeError as exc:
+                msg = str(exc)
+                if "BuilderFlag" in msg or "tensorrt_bindings" in msg:
+                    raise RuntimeError(
+                        "TensorRT 导出失败：当前 ultralytics 与 TensorRT 版本不兼容"
+                        f"（{msg}）。建议升级 ultralytics（pip install -U ultralytics）"
+                        "或降级 TensorRT 至 8.x。"
+                    ) from exc
+                raise
+
+            exported_path = str(exported_path)
+            # 移动到 final_path(若不在同一位置)
+            if os.path.abspath(exported_path) != os.path.abspath(final_path):
+                if output_dir:
+                    os.makedirs(output_dir, exist_ok=True)
+                shutil.move(exported_path, final_path)
+            logger.info("模型已导出到: %s", final_path)
+
+            # 验证(仅对 onnx/engine 做可加载性验证)
+            if export_format in {"onnx", "engine"}:
+                verify_device = export_kwargs.get("device", "") if export_format == "engine" else ""
+                success, error_msg = self._verify_exported_model(
+                    final_path,
+                    imgsz=export_kwargs.get("imgsz", 640),
+                    device=str(verify_device),
+                )
+                if not success:
+                    logger.error("导出文件验证失败: %s", error_msg)
+                    self._restore_export_backup(final_path, bak_path, has_backup)
+                    return final_path, False, error_msg
+                logger.info("导出文件验证通过: %s", final_path)
+
+            export_success = True
+            return final_path, True, ""
+        except Exception:
+            logger.error("模型导出异常,尝试恢复备份", exc_info=True)
+            self._restore_export_backup(final_path, bak_path, has_backup)
+            raise
+        finally:
+            # 导出成功后清理 .bak(若仍存在)
+            if export_success and has_backup and os.path.exists(bak_path):
+                try:
+                    os.remove(bak_path)
+                    logger.info("已清理备份文件: %s", bak_path)
+                except Exception as e:
+                    logger.warning("清理备份文件失败: %s", e)
+
+    def _restore_export_backup(self, final_path: str, bak_path: str, has_backup: bool) -> None:
+        """恢复备份文件到 final_path(若存在备份)。"""
+        if not has_backup:
+            return
+        try:
+            if os.path.exists(final_path):
+                if os.path.isdir(final_path):
+                    shutil.rmtree(final_path, ignore_errors=True)
+                else:
+                    os.remove(final_path)
+            shutil.move(bak_path, final_path)
+            logger.info("已恢复备份: %s -> %s", bak_path, final_path)
+        except Exception as e:
+            logger.error("恢复备份失败: %s", e)
 
     def _prepare_export_kwargs(self, format: str, kwargs: dict) -> dict:
         prepared = dict(kwargs)

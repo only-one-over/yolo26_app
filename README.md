@@ -41,6 +41,35 @@
 - 视频文件（MP4/AVI 等，自动提取帧）
 - 整个目录（批量导入所有图片）
 
+### YOLO + SAM2 批量自动标注流水线
+
+适用场景:已有 YOLO detect 模型 + 大量未标注图片(工业场景常见),人工标注上万张图耗时数十小时,本流水线可压到数小时。
+
+**工作流程**:
+1. 在测试页面加载 YOLO detect 模型
+2. 在标注区点击「SAM 分割」按钮加载 SAM2 模型
+3. 导入待标注图片
+4. 点击工具栏「逐帧检测」按钮
+5. 在弹出对话框中:
+   - 设置置信度阈值(默认 0.25)
+   - **勾选「使用 SAM2 生成精确掩码(polygon)」**
+6. 点击 OK,等待批量处理完成(进度对话框可取消)
+7. 人工复核少量错误标注
+8. 导出 YOLO segmentation 数据集
+
+**前置条件**:
+- 已加载 YOLO 模型(detect 或 segm 均可)
+- 已加载 SAM2 模型(需先 `pip install sam2` 并下载 SAM2 checkpoint)
+
+**输出**:polygon 类型标注,可直接导出 YOLO segmentation 格式数据集。
+
+**说明**:
+- 不勾选 SAM2 复选框时,行为与原「逐帧检测」完全一致(纯 YOLO,仅出 rect 或 segm 模型的 mask)
+- 勾选后:YOLO 预测 bbox → SAM2 用 bbox 作为 box prompt 生成 mask → 简化为 polygon(点数上限 200,避免文件膨胀)
+- 单张图 YOLO 无检测时自动跳过 SAM2 编码(节省显存)
+- 单个 bbox 处理失败不中断整批流程,仅 warning 跳过
+- 支持中途取消,已处理图片的部分结果会保留
+
 ### 📦 数据集导出
 
 | 功能 | 描述 |
@@ -107,6 +136,19 @@ output_dir/
 | `patience` | 100 | 早停耐心值（0 表示不早停） |
 | `model_family` | yolo26 | 模型族：yolo26 / yolov8 |
 | `augmentation_preset` | 默认 | 增强预设：关闭/轻度/默认/强增强/自定义 |
+
+#### 📈 训练曲线可视化
+
+训练界面内置训练曲线可视化面板,无需手动打开 TensorBoard 或 runs 目录:
+
+- **训练中实时更新**(每 5 秒轮询 `results.csv`):
+  - Loss 曲线:`train/box_loss`、`train/cls_loss`、`train/seg_loss`(seg 任务)、`val/box_loss`、`val/cls_loss`、`val/seg_loss`
+  - mAP 曲线:`mAP50`、`mAP50-95`
+- **训练完成后自动加载**:
+  - PR / F1 / P / R 曲线(`PR_curve.png`、`F1_curve.png`、`P_curve.png`、`R_curve.png`)
+  - 混淆矩阵(`confusion_matrix.png`、`confusion_matrix_normalized.png`)
+- **打开 runs 目录**:一键在系统文件管理器中打开 `runs/` 目录,访问完整图表与权重文件
+- 依赖 `pyqtgraph`(已纳入核心依赖)
 
 ### 🔍 推理测试
 
@@ -224,9 +266,22 @@ conda activate yolo26
 
 **3. 安装依赖**
 
+**方式一：基础安装（推荐新手）**
+
 ```bash
 pip install -r requirements.txt
 ```
+
+**方式二：锁定版安装（推荐生产环境，版本已验证兼容）**
+
+```bash
+# 先安装 PyTorch（需根据 CUDA 版本选择，见下方）
+pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+# 再安装其他锁定依赖
+pip install -r requirements-lock.txt
+```
+
+锁定版本组合：Python 3.10 + PyTorch 2.3.1 + CUDA 12.1 + Ultralytics 8.3.20 + TensorRT 10.2.0 + PyQt6 6.7.1 + OpenCV 4.10.0.84 + ONNX Runtime 1.18.1。
 
 > ⚠️ **Ultralytics 版本注意**：`requirements.txt` 要求 `ultralytics>=8.0`，但 TensorRT 10.x 用户需确保 Ultralytics ≥ 8.3.0（旧版本的 `BuilderFlag.FP16` 在 TensorRT 10 中已改为 `kFP16`，会导致导出报错）。如遇 `BuilderFlag has no attribute 'FP16'` 错误，执行 `pip install -U ultralytics`。
 
@@ -257,13 +312,19 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 ```bash
 # Intel RealSense 深度相机支持
-pip install pyrealsense2
+pip install -e ".[realsense]"
 
 # SAM 2 分割支持
-pip install sam2
+pip install -e ".[sam]"
 
 # Grounding DINO 支持
-pip install groundingdino
+pip install -e ".[dino]"
+
+# TensorRT 极速 GPU 推理（需 Ultralytics ≥ 8.3.0）
+pip install -e ".[tensorrt]"
+
+# 全部可选依赖
+pip install -e ".[all]"
 ```
 
 **6. 启动应用**
@@ -333,9 +394,11 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 | 矩形框 | 按住鼠标拖拽 | — |
 | 多边形 | 逐点点击，双击完成 | — |
 | 选择 | 点击标注选中 | — |
-| 删除 | 选中后按 Delete | Delete |
+| 删除 | 选中后按 Delete 或 空格 | Delete / 空格 |
 | 撤销 | 撤销上一步操作 | Ctrl+Z |
 | 重做 | 重做被撤销的操作 | Ctrl+Shift+Z |
+| 上一张 | 切换到上一张图片 | ↑ |
+| 下一张 | 切换到下一张图片 | ↓ 或 Shift+空格 |
 
 #### Step 5: 辅助标注（可选）
 
@@ -721,6 +784,29 @@ system_model/
 ```
 
 > 训练预训练模型会在首次训练时由 Ultralytics 自动下载到 `system_model/yolo/`。SAM2 和 GroundingDINO 模型需手动下载后放入对应目录。
+
+---
+
+## 🔍 诊断与排障
+
+### 日志位置
+
+应用运行日志自动写入项目根目录的 `logs/` 文件夹：
+- `logs/app_YYYYMMDD.log` — 每日轮转，保留 7 天
+- `logs/crash_YYYYMMDD_HHMMSS.log` — 崩溃日志（程序异常退出时自动生成）
+
+### 导出诊断报告
+
+遇到问题需要反馈时，可一键导出诊断报告：
+
+1. 菜单栏 → 帮助 → 导出诊断报告
+2. 选择保存路径（默认 `my_project/<workspace>/diagnostic_report_YYYYMMDD_HHMMSS.zip`）
+3. 报告包含：
+   - 系统信息（OS、Python、PyQt6、OpenCV、PyTorch、CUDA、Ultralytics、TensorRT 版本）
+   - GPU 状态
+   - 最近 7 天日志
+
+诊断报告可直接作为 Issue 附件上传，便于开发者快速定位问题。
 
 ---
 

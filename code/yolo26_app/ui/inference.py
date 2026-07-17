@@ -30,10 +30,13 @@ from PyQt6.QtWidgets import (
 )
 
 from yolo26_app.core.config import ProjectConfig
+from yolo26_app.core.logger import get_logger
 from yolo26_app.core.predictor import YOLOPredictor
 from yolo26_app.core.realsense_camera import RealSenseCamera
 from yolo26_app.ui import styles
 from yolo26_app.ui.export_dialog import ExportDialog
+
+logger = get_logger(__name__)
 
 
 class _ValidateWorker(QThread):
@@ -137,7 +140,7 @@ class _InferenceWorker(QThread):
         self._mutex.unlock()
         self.wait(5000)
         if self.isRunning():
-            print("警告:_InferenceWorker 未在 5 秒内退出,可能仍在后台运行")
+            logger.warning("警告:_InferenceWorker 未在 5 秒内退出,可能仍在后台运行")
         self._mutex.lock()
         self._stop_flag = False
         self._frame = None

@@ -1,5 +1,7 @@
+import os
 import random
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -10,6 +12,9 @@ from PyQt6.QtCore import QRectF
 
 from yolo26_app.core.annotation_canvas import AnnotationItem
 from yolo26_app.core.config import ClassItem
+from yolo26_app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class YOLOExporter:
@@ -106,6 +111,7 @@ class YOLOExporter:
             )
 
         # 其他任务使用标准 YOLO 格式
+        # 非空保护逻辑：若目标目录已存在且非空，则重定向到带时间戳的子目录（保持原语义）
         if out.exists():
             # 检查目录是否为空
             if any(out.iterdir()):
@@ -113,114 +119,78 @@ class YOLOExporter:
                 from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out = out / f"dataset_{timestamp}"
-        out.mkdir(parents=True, exist_ok=True)
 
-        dirs = {
-            "train_img": out / "images" / "train",
-            "val_img": out / "images" / "val",
-            "train_lbl": out / "labels" / "train",
-            "val_lbl": out / "labels" / "val",
-        }
+        # 在目标目录同级创建临时目录（隐藏目录，以 "." 开头），所有写入先进入临时目录，
+        # 全部完成后再原子重命名为目标目录，避免中途中断损坏已有数据
+        tmp_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{Path(output_dir).name}_tmp_",
+                dir=Path(output_dir).parent,
+            )
+        )
+        logger.info("开始导出到临时目录 %s", tmp_dir)
 
-        for d in dirs.values():
-            d.mkdir(parents=True, exist_ok=True)
+        try:
+            dirs = {
+                "train_img": tmp_dir / "images" / "train",
+                "val_img": tmp_dir / "images" / "val",
+                "train_lbl": tmp_dir / "labels" / "train",
+                "val_lbl": tmp_dir / "labels" / "val",
+            }
 
-        skipped_count = 0
+            for d in dirs.values():
+                d.mkdir(parents=True, exist_ok=True)
 
-        image_paths = list(annotations_dict.keys())
-        random.shuffle(image_paths)
-        split_idx = max(1, int(len(image_paths) * train_ratio))
-        train_paths = image_paths[:split_idx]
-        val_paths = image_paths[split_idx:]
+            skipped_count = 0
 
-        if not val_paths and len(train_paths) >= 2:
-            val_paths = [train_paths.pop()]
+            image_paths = list(annotations_dict.keys())
+            random.shuffle(image_paths)
+            split_idx = max(1, int(len(image_paths) * train_ratio))
+            train_paths = image_paths[:split_idx]
+            val_paths = image_paths[split_idx:]
 
-        def _process(paths: List[str], img_dir: Path, lbl_dir: Path) -> int:
-            nonlocal skipped_count
-            processed = 0
-            for img_path_str in paths:
-                img_path = Path(img_path_str)
-                if not img_path.exists():
-                    continue
+            if not val_paths and len(train_paths) >= 2:
+                val_paths = [train_paths.pop()]
 
-                anns = annotations_dict[img_path_str]
-                if not anns:
-                    skipped_count += 1
-                    continue
+            def _process(paths: List[str], img_dir: Path, lbl_dir: Path) -> int:
+                nonlocal skipped_count
+                processed = 0
+                for img_path_str in paths:
+                    img_path = Path(img_path_str)
+                    if not img_path.exists():
+                        continue
 
-                dest_img = img_dir / img_path.name
-                shutil.copy2(str(img_path), str(dest_img))
+                    anns = annotations_dict[img_path_str]
+                    if not anns:
+                        skipped_count += 1
+                        continue
 
-                img = cv2.imread(str(img_path))
-                if img is None:
-                    skipped_count += 1
-                    continue
-                img_h, img_w = img.shape[:2]
-                if img_w <= 0 or img_h <= 0:
-                    skipped_count += 1
-                    continue
+                    dest_img = img_dir / img_path.name
+                    shutil.copy2(str(img_path), str(dest_img))
 
-                label_name = img_path.stem + ".txt"
-                label_path = lbl_dir / label_name
+                    img = cv2.imread(str(img_path))
+                    if img is None:
+                        skipped_count += 1
+                        continue
+                    img_h, img_w = img.shape[:2]
+                    if img_w <= 0 or img_h <= 0:
+                        skipped_count += 1
+                        continue
 
-                lines: List[str] = []
-                for ann in anns:
-                    if ann.item_type == "rect":
-                        if task == "segment":
-                            continue
-                        w = ann.rect.width()
-                        h = ann.rect.height()
-                        if w < 1 or h < 1:
-                            continue
-                        cx = (ann.rect.x() + w / 2) / img_w
-                        cy = (ann.rect.y() + h / 2) / img_h
-                        nw = w / img_w
-                        nh = h / img_h
-                        cx = max(0.0, min(1.0, cx))
-                        cy = max(0.0, min(1.0, cy))
-                        nw = max(0.0, min(1.0, nw))
-                        nh = max(0.0, min(1.0, nh))
-                        if nw <= 0 or nh <= 0:
-                            continue
-                        if task == "pose" and not ann.keypoints:
-                            continue
-                        if task == "pose" and ann.keypoints:
-                            kpt_parts = []
-                            for kp in ann.keypoints:
-                                kx = kp.x() / img_w
-                                ky = kp.y() / img_h
-                                kpt_parts.extend([f"{kx:.6f}", f"{ky:.6f}", "2"])
-                            line = f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
-                            if kpt_parts:
-                                line += " " + " ".join(kpt_parts)
-                            lines.append(line)
-                        else:
-                            lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
-                    elif ann.item_type == "polygon":
-                        if ann.polygon.size() < 3:
-                            continue
-                        if task == "segment":
-                            pts = [(pt.x(), pt.y()) for pt in ann.polygon]
-                            pts_np = np.array(pts, dtype=np.float32)
-                            peri = cv2.arcLength(pts_np, True)
-                            epsilon = 0.005 * peri
-                            approx_np = cv2.approxPolyDP(pts_np, epsilon, True)
-                            if len(approx_np) < 3:
-                                approx_np = pts_np.reshape(-1, 1, 2)
-                            coords: List[str] = [str(ann.class_index)]
-                            for pt in approx_np.reshape(-1, 2):
-                                coords.append(f"{max(0.0, min(1.0, pt[0] / img_w)):.6f}")
-                                coords.append(f"{max(0.0, min(1.0, pt[1] / img_h)):.6f}")
-                            lines.append(" ".join(coords))
-                        else:
-                            bbox = ann.polygon.boundingRect()
-                            w = bbox.width()
-                            h = bbox.height()
+                    label_name = img_path.stem + ".txt"
+                    label_path = lbl_dir / label_name
+
+                    lines: List[str] = []
+                    for ann in anns:
+                        if ann.item_type == "rect":
+                            if task == "segment":
+                                continue
+                            w = ann.rect.width()
+                            h = ann.rect.height()
                             if w < 1 or h < 1:
                                 continue
-                            cx = (bbox.x() + w / 2) / img_w
-                            cy = (bbox.y() + h / 2) / img_h
+                            cx = (ann.rect.x() + w / 2) / img_w
+                            cy = (ann.rect.y() + h / 2) / img_h
                             nw = w / img_w
                             nh = h / img_h
                             cx = max(0.0, min(1.0, cx))
@@ -229,20 +199,9 @@ class YOLOExporter:
                             nh = max(0.0, min(1.0, nh))
                             if nw <= 0 or nh <= 0:
                                 continue
-                            lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
-                    elif ann.item_type == "keypoint":
-                        if task == "pose":
-                            if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0:
-                                cx = (ann.rect.x() + ann.rect.width() / 2) / img_w
-                                cy = (ann.rect.y() + ann.rect.height() / 2) / img_h
-                                nw = ann.rect.width() / img_w
-                                nh = ann.rect.height() / img_h
-                                cx = max(0.0, min(1.0, cx))
-                                cy = max(0.0, min(1.0, cy))
-                                nw = max(0.0, min(1.0, nw))
-                                nh = max(0.0, min(1.0, nh))
-                                if nw <= 0 or nh <= 0:
-                                    continue
+                            if task == "pose" and not ann.keypoints:
+                                continue
+                            if task == "pose" and ann.keypoints:
                                 kpt_parts = []
                                 for kp in ann.keypoints:
                                     kx = kp.x() / img_w
@@ -252,55 +211,127 @@ class YOLOExporter:
                                 if kpt_parts:
                                     line += " " + " ".join(kpt_parts)
                                 lines.append(line)
+                            else:
+                                lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                        elif ann.item_type == "polygon":
+                            if ann.polygon.size() < 3:
+                                continue
+                            if task == "segment":
+                                pts = [(pt.x(), pt.y()) for pt in ann.polygon]
+                                pts_np = np.array(pts, dtype=np.float32)
+                                peri = cv2.arcLength(pts_np, True)
+                                epsilon = 0.005 * peri
+                                approx_np = cv2.approxPolyDP(pts_np, epsilon, True)
+                                if len(approx_np) < 3:
+                                    approx_np = pts_np.reshape(-1, 1, 2)
+                                coords: List[str] = [str(ann.class_index)]
+                                for pt in approx_np.reshape(-1, 2):
+                                    coords.append(f"{max(0.0, min(1.0, pt[0] / img_w)):.6f}")
+                                    coords.append(f"{max(0.0, min(1.0, pt[1] / img_h)):.6f}")
+                                lines.append(" ".join(coords))
+                            else:
+                                bbox = ann.polygon.boundingRect()
+                                w = bbox.width()
+                                h = bbox.height()
+                                if w < 1 or h < 1:
+                                    continue
+                                cx = (bbox.x() + w / 2) / img_w
+                                cy = (bbox.y() + h / 2) / img_h
+                                nw = w / img_w
+                                nh = h / img_h
+                                cx = max(0.0, min(1.0, cx))
+                                cy = max(0.0, min(1.0, cy))
+                                nw = max(0.0, min(1.0, nw))
+                                nh = max(0.0, min(1.0, nh))
+                                if nw <= 0 or nh <= 0:
+                                    continue
+                                lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                        elif ann.item_type == "keypoint":
+                            if task == "pose":
+                                if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0:
+                                    cx = (ann.rect.x() + ann.rect.width() / 2) / img_w
+                                    cy = (ann.rect.y() + ann.rect.height() / 2) / img_h
+                                    nw = ann.rect.width() / img_w
+                                    nh = ann.rect.height() / img_h
+                                    cx = max(0.0, min(1.0, cx))
+                                    cy = max(0.0, min(1.0, cy))
+                                    nw = max(0.0, min(1.0, nw))
+                                    nh = max(0.0, min(1.0, nh))
+                                    if nw <= 0 or nh <= 0:
+                                        continue
+                                    kpt_parts = []
+                                    for kp in ann.keypoints:
+                                        kx = kp.x() / img_w
+                                        ky = kp.y() / img_h
+                                        kpt_parts.extend([f"{kx:.6f}", f"{ky:.6f}", "2"])
+                                    line = f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
+                                    if kpt_parts:
+                                        line += " " + " ".join(kpt_parts)
+                                    lines.append(line)
 
-                if not lines:
-                    skipped_count += 1
-                    continue
+                    if not lines:
+                        skipped_count += 1
+                        continue
 
-                label_path.write_text("\n".join(lines), encoding="utf-8")
-                processed += 1
-            return processed
+                    label_path.write_text("\n".join(lines), encoding="utf-8")
+                    processed += 1
+                return processed
 
-        train_count = _process(train_paths, dirs["train_img"], dirs["train_lbl"])
-        val_count = _process(val_paths, dirs["val_img"], dirs["val_lbl"])
+            train_count = _process(train_paths, dirs["train_img"], dirs["train_lbl"])
+            val_count = _process(val_paths, dirs["val_img"], dirs["val_lbl"])
 
-        if train_count == 0:
-            raise ValueError("训练集为空，无法生成有效数据集")
-        if val_count == 0:
-            raise ValueError("验证集为空，无法生成有效数据集")
+            if train_count == 0:
+                raise ValueError("训练集为空，无法生成有效数据集")
+            if val_count == 0:
+                raise ValueError("验证集为空，无法生成有效数据集")
 
-        yaml_content = {
-            "path": str(out.resolve()),
-            "train": "images/train",
-            "val": "images/val",
-            "nc": len(classes),
-            "names": {i: c.name for i, c in enumerate(classes)},
-        }
+            yaml_content = {
+                "path": str(out.resolve()),
+                "train": "images/train",
+                "val": "images/val",
+                "nc": len(classes),
+                "names": {i: c.name for i, c in enumerate(classes)},
+            }
 
-        if task == "pose":
-            max_kpt = 0
-            for cls in classes:
-                if hasattr(cls, 'kpt_count') and cls.kpt_count > max_kpt:
-                    max_kpt = cls.kpt_count
-            if max_kpt == 0:
-                for anns in annotations_dict.values():
-                    for ann in anns:
-                        if ann.item_type == "keypoint" and len(ann.keypoints) > max_kpt:
-                            max_kpt = len(ann.keypoints)
-            if max_kpt > 0:
-                yaml_content["kpt_shape"] = [max_kpt, 3]
-                # flip_idx 不自动生成，需用户根据关键点语义配置左右翻转映射
-                if flip_idx is not None:
-                    yaml_content["flip_idx"] = flip_idx
+            if task == "pose":
+                max_kpt = 0
+                for cls in classes:
+                    if hasattr(cls, 'kpt_count') and cls.kpt_count > max_kpt:
+                        max_kpt = cls.kpt_count
+                if max_kpt == 0:
+                    for anns in annotations_dict.values():
+                        for ann in anns:
+                            if ann.item_type == "keypoint" and len(ann.keypoints) > max_kpt:
+                                max_kpt = len(ann.keypoints)
+                if max_kpt > 0:
+                    yaml_content["kpt_shape"] = [max_kpt, 3]
+                    # flip_idx 不自动生成，需用户根据关键点语义配置左右翻转映射
+                    if flip_idx is not None:
+                        yaml_content["flip_idx"] = flip_idx
 
-        yaml_path = out / "data.yaml"
-        with open(yaml_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(yaml_content, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-            # pose 任务未配置 flip_idx 时添加提示注释
-            if task == "pose" and flip_idx is None and "kpt_shape" in yaml_content:
-                f.write("# flip_idx: 需用户根据关键点语义配置左右翻转映射\n")
+            yaml_path = tmp_dir / "data.yaml"
+            with open(yaml_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(yaml_content, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                # pose 任务未配置 flip_idx 时添加提示注释
+                if task == "pose" and flip_idx is None and "kpt_shape" in yaml_content:
+                    f.write("# flip_idx: 需用户根据关键点语义配置左右翻转映射\n")
 
-        return str(yaml_path), {"train_count": train_count, "val_count": val_count, "skipped_count": skipped_count}
+            # 全部写入完成，处理目标目录并原子重命名
+            # os.replace 在 Windows 上要求目标目录不存在；若目标已存在（仅可能为空目录）先移除
+            if out.exists() and out.is_dir():
+                try:
+                    out.rmdir()
+                except OSError:
+                    shutil.rmtree(out, ignore_errors=True)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(str(tmp_dir), str(out))
+            logger.info("导出完成,重命名为 %s", out)
+        finally:
+            # 中途中断（异常）时清理临时目录，避免残留
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return str(out / "data.yaml"), {"train_count": train_count, "val_count": val_count, "skipped_count": skipped_count}
 
     @staticmethod
     def _export_classify_dataset(
