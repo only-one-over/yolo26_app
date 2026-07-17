@@ -29,15 +29,25 @@ env/
 *.mlmodel
 
 # Training outputs
-runs/
+runs/*
 wandb/
+# 保留目录骨架(.gitkeep 例外)
+!runs/.gitkeep
 
 # Datasets
-datasets/
+datasets/*
+# 保留目录骨架(.gitkeep 例外)
+!datasets/.gitkeep
 
 # Workspace directories (auto-created, contains user data/models)
-system_model/
-my_project/
+system_model/*
+my_project/*
+# 保留目录骨架(.gitkeep 例外)
+!system_model/.gitkeep
+!my_project/.gitkeep
+!my_project/default/
+my_project/default/*
+!my_project/default/.gitkeep
 
 # Application runtime data
 .yolo26_app/

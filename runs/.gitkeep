@@ -1,0 +1,3 @@
+# 此目录存放训练输出(权重、日志、results.csv、图表等)。
+# 每次训练创建一个子文件夹,例如 runs/train1/、runs/train2/。
+# 本文件仅用于在 Git 仓库中保留目录骨架,实际内容被 .gitignore 忽略。

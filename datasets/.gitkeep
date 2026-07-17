@@ -1,0 +1,3 @@
+# 此目录存放导出的数据集(YOLO 格式:images/ + labels/)。
+# 每次导出创建一个子文件夹,例如 datasets/dataset1/、datasets/dataset2/。
+# 本文件仅用于在 Git 仓库中保留目录骨架,实际内容被 .gitignore 忽略。
