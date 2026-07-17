@@ -417,39 +417,50 @@ python -c "import torch; print('CUDA可用:', torch.cuda.is_available()); print(
 
 ```
 yolo26_app/
-├── main.py                          # 应用入口
-├── yolo26_app/                      # 应用主包
-│   ├── core/                        # 核心业务逻辑
-│   │   ├── config.py                # 数据模型 (ClassItem, TrainConfig, ProjectConfig)
-│   │   ├── paths.py                 # 工作区路径常量 (system_model/my_project)
-│   │   ├── project_manager.py       # 项目管理（创建/打开/最近项目/路径）
-│   │   ├── label_manager.py         # 标注类别管理（增删改查/颜色分配）
-│   │   ├── annotation_canvas.py     # 标注画布 (Scene + View + 撤销/重做 + 增量绘制)
-│   │   ├── yolo_exporter.py         # YOLO 数据集导出（格式转换/校验/划分）
-│   │   ├── trainer.py               # YOLO 训练器 (QThread + 回调进度)
-│   │   ├── predictor.py             # YOLO 推理器（加载/推理/验证/导出/TensorRT兼容）
-│   │   ├── auto_annotator.py        # 辅助标注 (SAM/DINO)
-│   │   ├── gpu_detector.py          # GPU 检测 (异步/超时保护/缓存/安全模式)
-│   │   ├── task_manager.py          # 后台任务管理器 (异步/超时/回调)
-│   │   └── realsense_camera.py      # RealSense 深度相机（设备枚举/帧获取/深度着色）
-│   └── ui/                          # 用户界面
-│       ├── main_window.py           # 主窗口 (异步GPU检测/安全模式/延迟加载/页面导航)
-│       ├── annotate_widget.py       # 标注模块 (持久化/批量检测/类别映射/辅助标注)
-│       ├── train_widget.py          # 训练模块 (参数配置/进度显示/日志)
-│       ├── test_widget.py           # 测试模块 (异步推理/验证/导出/帧跳过)
-│       ├── export_dialog.py         # 导出对话框 (格式/参数/预设)
-│       └── styles.py                # QSS 样式表 (Catppuccin Mocha/Latte)
-├── system_model/                    # 系统模型目录（自动创建）
+├── main.py                          # 应用入口（python main.py 启动）
+├── code/                            # ✅ 代码核心（用户更新只需替换此文件夹）
+│   └── yolo26_app/                  # 应用主包
+│       ├── core/                    # 核心业务逻辑
+│       │   ├── config.py            # 数据模型 (ClassItem, TrainConfig, ProjectConfig)
+│       │   ├── paths.py             # 工作区路径常量 (system_model/my_project)
+│       │   ├── project_manager.py   # 项目管理（创建/打开/最近项目/路径）
+│       │   ├── label_manager.py     # 标注类别管理（增删改查/颜色分配）
+│       │   ├── annotation_canvas.py # 标注画布 (Scene + View + 撤销/重做 + 增量绘制)
+│       │   ├── yolo_exporter.py     # YOLO 数据集导出（格式转换/校验/划分）
+│       │   ├── trainer.py           # YOLO 训练器 (QThread + 回调进度)
+│       │   ├── predictor.py         # YOLO 推理器（加载/推理/验证/导出/TensorRT兼容）
+│       │   ├── auto_annotator.py    # 辅助标注 (SAM/DINO)
+│       │   ├── gpu_detector.py      # GPU 检测 (异步/超时保护/缓存/安全模式)
+│       │   ├── task_manager.py      # 后台任务管理器 (异步/超时/回调)
+│       │   ├── model_registry.py    # 模型/增强预设常量统一管理
+│       │   ├── persistence.py       # 原子写入工具
+│       │   ├── workspace_manager.py # 工作区间管理
+│       │   ├── realsense_camera.py  # RealSense 深度相机（设备枚举/帧获取/深度着色）
+│       │   ├── config_template.yaml # 默认配置模板
+│       │   └── utils/               # 通用工具（中文路径图像读写等）
+│       └── ui/                      # 用户界面
+│           ├── main_window.py       # 主窗口 (异步GPU检测/安全模式/延迟加载/页面导航)
+│           ├── annotation.py        # 标注模块 (持久化/批量检测/类别映射/辅助标注)
+│           ├── training.py          # 训练模块 (参数配置/进度显示/日志)
+│           ├── inference.py         # 测试模块 (异步推理/验证/导出/帧跳过)
+│           ├── export_dialog.py     # 导出对话框 (格式/参数/预设)
+│           ├── styles.py            # QSS 样式表 (Catppuccin Mocha/Latte)
+│           └── icons/               # SVG 图标资源
+├── system_model/                    # 系统模型目录（自动创建，gitignore）
 │   ├── yolo/                        # 训练预训练模型 (yolo26n.pt 等)
 │   ├── sam2/                        # SAM2 分割模型权重
-│   └── grounding_dino/              # GroundingDINO 模型权重
-├── my_project/                      # 用户项目目录（自动创建）
+│   ├── grounding_dino/              # GroundingDINO 模型权重
+│   └── user_trained/                # 用户训练模型
+├── my_project/                      # 用户项目目录（自动创建，gitignore）
+│   ├── default/                     # 默认工作区间（自由空间模式使用）
+│   └── project1/                    # 用户工作区间
 ├── requirements.txt                 # 依赖清单
 ├── pyproject.toml                   # 项目配置
-├── CODE_WIKI.md                     # 详细架构文档
 ├── LICENSE                          # MIT 许可证
 └── README.md                        # 本文件
 ```
+
+> 💡 **代码核心在 `code/` 文件夹下**，用户更新项目时只需替换 `code/` 文件夹即可获得最新功能，不影响模型（`system_model/`）、用户数据（`my_project/`）和配置。
 
 ### 核心数据模型
 

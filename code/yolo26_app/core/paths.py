@@ -5,7 +5,7 @@
 from pathlib import Path
 
 # 工作区根目录（项目根目录：d:\ultralytics-main）
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 # 系统模型目录（按用途分子文件夹）
 SYSTEM_MODEL_DIR = WORKSPACE_ROOT / "system_model"
@@ -15,8 +15,14 @@ SYSTEM_MODEL_SUBDIRS = {
     "grounding_dino": SYSTEM_MODEL_DIR / "grounding_dino",  # GroundingDINO
 }
 
+# 用户训练模型目录（存放在系统模型目录下，便于统一管理）
+USER_TRAINED_MODELS_DIR = SYSTEM_MODEL_DIR / "user_trained"
+
 # 用户项目根目录
 PROJECTS_ROOT = WORKSPACE_ROOT / "my_project"
+
+# 默认工作区间（自由空间模式时数据持久化到此目录）
+DEFAULT_PROJECT_DIR = PROJECTS_ROOT / "default"
 
 # 应用状态目录（沿用已有，~/.yolo26_app）
 APP_DATA_DIR = Path.home() / ".yolo26_app"
@@ -27,4 +33,6 @@ def ensure_workspace_dirs() -> None:
     SYSTEM_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     for d in SYSTEM_MODEL_SUBDIRS.values():
         d.mkdir(parents=True, exist_ok=True)
+    USER_TRAINED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    DEFAULT_PROJECT_DIR.mkdir(parents=True, exist_ok=True)

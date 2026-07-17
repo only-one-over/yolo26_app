@@ -1,0 +1,56 @@
+# YOLO26 App 默认配置模板
+# 新用户可参考此模板了解可配置参数及推荐值
+
+# ===== 训练参数 =====
+train:
+  task: detect              # 任务类型: detect/segment/classify/pose
+  model_family: yolo26      # 模型系列: yolo26/yolov8
+  model_size: n             # 模型大小: n/s/m/l/x
+  epochs: 100               # 训练轮数
+  batch: 16                 # 批大小
+  imgsz: 640                # 图像尺寸
+  device: auto              # 设备: auto/cpu/0/0,1
+  optimizer: auto           # 优化器: auto/SGD/Adam/AdamW
+  lr0: 0.01                 # 初始学习率
+  patience: 100             # 早停耐心(0=不启用)
+  workers: 8                # 数据加载线程数
+  cache: false              # 缓存数据: true/false
+  seed: 0                   # 随机种子
+  plots: true               # 生成训练图表
+  close_mosaic: 10          # 最后 N 轮关闭 mosaic
+
+# ===== 推理参数 =====
+inference:
+  conf: 0.25                # 置信度阈值
+  iou: 0.45                 # NMS IoU 阈值
+  imgsz: 640                # 推理图像尺寸
+  device: auto              # 推理设备
+
+# ===== 数据增强默认值 =====
+augmentation:
+  enabled: true             # 是否启用数据增强
+  preset: default           # 预设: default/conservative/aggressive/none/custom
+
+  # 颜色增强
+  hsv_h: 0.015              # HSV 色调
+  hsv_s: 0.7                # HSV 饱和度
+  hsv_v: 0.4                # HSV 亮度
+
+  # 几何增强
+  degrees: 0.0              # 旋转角度
+  translate: 0.1            # 平移比例
+  scale: 0.5                # 缩放比例
+  shear: 0.0                # 剪切角度
+  perspective: 0.0          # 透视变换
+  flipud: 0.0               # 上下翻转概率
+  fliplr: 0.5               # 左右翻转概率
+
+  # 组合增强
+  mosaic: 1.0               # Mosaic 概率
+  mixup: 0.0                # MixUp 概率
+  cutmix: 0.0               # CutMix 概率
+  copy_paste: 0.0           # Copy-Paste 概率
+
+  # 高级增强
+  erasing: 0.4              # 擦除概率
+  auto_augment: ""          # 自动增强: randaugment/autoaugment/""

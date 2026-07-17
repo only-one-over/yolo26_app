@@ -46,8 +46,10 @@ my_project/
 .DS_Store
 Thumbs.db
 
-# Trae internal
+# Process files (design references, AI specs, architecture docs)
 .trae/
+.design/
+CODE_WIKI.md
 
 # Logs
 *.log
@@ -56,3 +58,6 @@ Thumbs.db
 .graphify_*.json
 _graphify_*.py
 graphify-out/
+
+# Tests (development only)
+tests/

@@ -34,9 +34,9 @@ from yolo26_app.core.persistence import write_json_atomic
 
 if TYPE_CHECKING:
     from yolo26_app.core.gpu_detector import GPUDetectWorker
-    from yolo26_app.ui.annotate_widget import AnnotateWidget
-    from yolo26_app.ui.train_widget import TrainWidget
-    from yolo26_app.ui.test_widget import TestWidget
+    from yolo26_app.ui.annotation import AnnotateWidget
+    from yolo26_app.ui.training import TrainWidget
+    from yolo26_app.ui.inference import TestWidget
 
 APP_STATE_DIR = Path.home() / ".yolo26_app"
 APP_STATE_FILE = APP_STATE_DIR / "app_state.json"
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
 
         page: Optional[QWidget] = None
         if index == 0 and self.annotate_widget is None:
-            from yolo26_app.ui.annotate_widget import AnnotateWidget
+            from yolo26_app.ui.annotation import AnnotateWidget
 
             self.annotate_widget = AnnotateWidget()
             self.annotate_widget.state_changed.connect(self._on_annotation_state_changed)
@@ -249,14 +249,14 @@ class MainWindow(QMainWindow):
             if self.test_widget is not None:
                 self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
         elif index == 1 and self.train_widget is None:
-            from yolo26_app.ui.train_widget import TrainWidget
+            from yolo26_app.ui.training import TrainWidget
 
             self.train_widget = TrainWidget()
             page = self.train_widget
             if self.current_project_config is not None:
                 self.train_widget.set_project_config(self.current_project_config)
         elif index == 2 and self.test_widget is None:
-            from yolo26_app.ui.test_widget import TestWidget
+            from yolo26_app.ui.inference import TestWidget
 
             self.test_widget = TestWidget()
             page = self.test_widget
@@ -619,8 +619,8 @@ class MainWindow(QMainWindow):
             workspaces = WorkspaceManager.list_workspaces()
             for name in workspaces:
                 self.workspace_combo.addItem(name)
-            # 末尾追加"自由空间"项(允许自由导入图片和标注但不持久化)
-            self.workspace_combo.addItem("自由空间")
+            # 末尾追加"默认工作区间"项(数据保存到 my_project/default/)
+            self.workspace_combo.addItem("默认工作区间")
             # 恢复选中(若仍存在)
             if current_name:
                 i = self.workspace_combo.findText(current_name)
@@ -658,34 +658,24 @@ class MainWindow(QMainWindow):
         name = self.workspace_combo.itemText(index)
         if not name or name == "请选择工作区间":
             return
-        if name == "自由空间":
+        if name == "默认工作区间":
             # flush_autosave 当前工作区间
             if self.annotate_widget is not None:
                 try:
                     self.annotate_widget.flush_autosave()
                 except Exception:
                     pass
-            # 设置无工作区间
-            self.current_project_config = None
-            self.setWindowTitle("YOLO26 App - 自由空间")
-            # 各 widget 清空
-            if self.annotate_widget is not None:
-                try:
-                    self.annotate_widget.set_project_config(None)
-                except Exception:
-                    pass
-            if self.train_widget is not None:
-                try:
-                    self.train_widget.set_project_config(None)
-                except Exception:
-                    pass
-            if self.test_widget is not None:
-                try:
-                    self.test_widget.set_project_config(None)
-                except Exception:
-                    pass
-            self._last_successful_workspace = "自由空间"
-            self.statusbar.showMessage("自由空间模式:标注不持久化", 0)
+            # 使用默认工作区间(my_project/default/)
+            from yolo26_app.core.paths import DEFAULT_PROJECT_DIR
+            from yolo26_app.core.config import ProjectConfig
+            default_config = ProjectConfig(
+                project_name="default",
+                project_path=str(DEFAULT_PROJECT_DIR),
+            )
+            DEFAULT_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+            self._set_project_config(default_config)
+            self._last_successful_workspace = "默认工作区间"
+            self.statusbar.showMessage("默认工作区间:数据保存到 my_project/default/", 0)
             self._schedule_recovery_save()
             return
         from yolo26_app.core.workspace_manager import WorkspaceManager

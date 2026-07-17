@@ -40,8 +40,6 @@ dino = ["groundingdino-pip"]
 realsense = ["pyrealsense2>=2.50.0"]
 all = ["sam2", "groundingdino-pip", "pyrealsense2>=2.50.0"]
 
-[project.scripts]
-yolo26-app = "yolo26_app.main:main"
-
 [tool.setuptools.packages.find]
+where = ["code"]
 include = ["yolo26_app*"]

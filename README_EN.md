@@ -396,32 +396,50 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 
 ```
 yolo26_app/
-├── main.py                          # App entry point
-├── yolo26_app/                      # Main package
-│   ├── core/                        # Core business logic
-│   │   ├── config.py                # Data models
-│   │   ├── project_manager.py       # Project management
-│   │   ├── label_manager.py         # Class management
-│   │   ├── annotation_canvas.py     # Annotation canvas + undo/redo
-│   │   ├── yolo_exporter.py         # Dataset export
-│   │   ├── trainer.py               # Trainer (QThread + callbacks)
-│   │   ├── predictor.py             # Predictor
-│   │   ├── auto_annotator.py        # Assisted annotation (SAM/DINO)
-│   │   ├── gpu_detector.py          # GPU detection (async/timeout/cache/safe mode)
-│   │   ├── task_manager.py          # Background task manager (async/timeout/callback)
-│   │   └── realsense_camera.py      # RealSense depth camera
-│   └── ui/                          # User interface
-│       ├── main_window.py           # Main window (async GPU detection/safe mode/lazy load/navigation)
-│       ├── annotate_widget.py       # Annotation module
-│       ├── train_widget.py          # Training module
-│       ├── test_widget.py           # Testing module
-│       └── styles.py                # Stylesheet (Catppuccin)
+├── main.py                          # Application entry point (python main.py)
+├── code/                            # ✅ Code core (users only need to update this folder)
+│   └── yolo26_app/                  # Main package
+│       ├── core/                    # Core business logic
+│       │   ├── config.py            # Data models (ClassItem, TrainConfig, ProjectConfig)
+│       │   ├── paths.py             # Workspace path constants (system_model/my_project)
+│       │   ├── project_manager.py   # Project management (create/open/recent/paths)
+│       │   ├── label_manager.py     # Annotation class management
+│       │   ├── annotation_canvas.py # Annotation canvas (Scene + View + undo/redo)
+│       │   ├── yolo_exporter.py     # YOLO dataset export
+│       │   ├── trainer.py           # YOLO trainer (QThread + callback progress)
+│       │   ├── predictor.py         # YOLO predictor (load/infer/validate/export)
+│       │   ├── auto_annotator.py    # Assisted annotation (SAM/DINO)
+│       │   ├── gpu_detector.py      # GPU detection (async/timeout/cache/safe mode)
+│       │   ├── task_manager.py      # Background task manager
+│       │   ├── model_registry.py    # Model/augmentation constants
+│       │   ├── persistence.py       # Atomic write utilities
+│       │   ├── workspace_manager.py # Workspace management
+│       │   ├── realsense_camera.py  # RealSense depth camera
+│       │   ├── config_template.yaml # Default config template
+│       │   └── utils/               # Common utilities (unicode path image I/O)
+│       └── ui/                      # User interface
+│           ├── main_window.py       # Main window (async GPU/safe mode/lazy load)
+│           ├── annotation.py        # Annotation module
+│           ├── training.py          # Training module
+│           ├── inference.py         # Inference module
+│           ├── export_dialog.py     # Export dialog
+│           ├── styles.py            # QSS styles (Catppuccin Mocha/Latte)
+│           └── icons/               # SVG icon resources
+├── system_model/                    # System models (auto-created, gitignored)
+│   ├── yolo/                        # Pretrained YOLO models
+│   ├── sam2/                        # SAM2 model weights
+│   ├── grounding_dino/              # GroundingDINO model weights
+│   └── user_trained/                # User-trained models
+├── my_project/                      # User projects (auto-created, gitignored)
+│   ├── default/                     # Default workspace (free-space mode)
+│   └── project1/                    # User workspace
 ├── requirements.txt                 # Dependencies
 ├── pyproject.toml                   # Project config
-├── CODE_WIKI.md                     # Architecture docs
-├── LICENSE                          # License
-└── README.md                        # Chinese README
+├── LICENSE                          # MIT License
+└── README.md                        # This file
 ```
+
+> 💡 **Code core is in the `code/` folder**. To update, users only need to replace the `code/` folder without affecting models (`system_model/`), user data (`my_project/`), and configs.
 
 ### Core Data Models
 
