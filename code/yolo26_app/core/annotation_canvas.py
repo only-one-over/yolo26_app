@@ -1,3 +1,5 @@
+import copy
+import math
 from typing import List, Optional
 
 from dataclasses import dataclass, field
@@ -17,6 +19,14 @@ from PyQt6.QtWidgets import (
     QGraphicsSceneWheelEvent,
 )
 
+# 工具类型常量(与现有字符串字面量保持兼容,作为别名使用)
+TOOL_SELECT = "select"
+TOOL_RECT = "rect"
+TOOL_POLYGON = "polygon"
+TOOL_KEYPOINT = "keypoint"
+TOOL_OBB = "obb"
+TOOL_SAM = "sam"
+
 
 @dataclass
 class AnnotationItem:
@@ -25,6 +35,8 @@ class AnnotationItem:
     polygon: QPolygonF = field(default_factory=QPolygonF)
     item_type: str = "rect"
     keypoints: List[QPointF] = field(default_factory=list)
+    # OBB 旋转角度(弧度),仅 item_type == "obb" 时使用,默认 0.0 向后兼容 rect
+    angle: float = 0.0
 
 
 class _SignalHolder(QObject):
@@ -60,6 +72,19 @@ class AnnotationScene(QGraphicsScene):
         self._current_kpt_count: int = 0
         self._undo_stack: list = []
         self._redo_stack: list = []
+
+        # OBB(旋转框)相关状态:第一次拖拽确定外接矩形,第二次拖拽围绕中心旋转
+        self._obb_pending_index: int = -1  # 第一次拖拽完成后的待旋转 OBB index
+        self._obb_rotating: bool = False
+        self._obb_rotation_start_angle: float = 0.0  # 旋转开始时鼠标相对中心的角度
+        self._obb_rotation_orig_angle: float = 0.0  # 旋转开始时 OBB 原始角度
+
+        # 多边形顶点编辑相关状态
+        self._vertex_handles: list = []  # list[QGraphicsEllipseItem] 顶点句柄
+        self._vertex_dragging: bool = False
+        self._dragging_vertex_index: int = -1
+        self._dragging_ann_index: int = -1
+        self._pre_drag_ann: Optional[AnnotationItem] = None  # 拖拽前副本,用于 undo
 
     @property
     def current_tool(self) -> str:
@@ -136,9 +161,55 @@ class AnnotationScene(QGraphicsScene):
             self._temp_sam_items.clear()
             self._sam_points.clear()
             self._sam_labels.clear()
+        # 清理 OBB 待旋转状态(切换工具或取消绘制时,待旋转的 OBB 仍保留角度 0)
+        self._obb_pending_index = -1
+        self._obb_rotating = False
+        # 清理顶点句柄
+        self._hide_vertex_handles()
+        self._vertex_dragging = False
+        self._dragging_vertex_index = -1
+        self._dragging_ann_index = -1
+        self._pre_drag_ann = None
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         pos = event.scenePos()
+
+        # select 工具下:优先检测顶点句柄命中(左键拖拽 / 右键删除)
+        if self._current_tool == TOOL_SELECT and self._selected_index >= 0:
+            # 右键命中顶点句柄 → 删除该顶点
+            if event.button() == Qt.MouseButton.RightButton:
+                for h in self._vertex_handles:
+                    if h.contains(pos):
+                        ann_index = h.data(0)
+                        vi = h.data(1)
+                        ann = self._annotations[ann_index]
+                        if ann.polygon.count() <= 3:
+                            # 顶点数不足,不允许删除
+                            return
+                        old_ann = copy.deepcopy(ann)
+                        new_poly = QPolygonF()
+                        for i in range(ann.polygon.count()):
+                            if i != vi:
+                                new_poly.append(ann.polygon.at(i))
+                        ann.polygon = new_poly
+                        self._undo_stack.append(("modify", ann_index, old_ann, copy.deepcopy(ann)))
+                        self._redo_stack.clear()
+                        if len(self._undo_stack) > 50:
+                            self._undo_stack.pop(0)
+                        self._redraw_at(ann_index)
+                        self._hide_vertex_handles()
+                        self._show_vertex_handles(ann_index)
+                        self.annotations_changed.emit()
+                        return
+            # 左键命中顶点句柄 → 进入顶点拖拽
+            elif event.button() == Qt.MouseButton.LeftButton:
+                for h in self._vertex_handles:
+                    if h.contains(pos):
+                        self._vertex_dragging = True
+                        self._dragging_ann_index = h.data(0)
+                        self._dragging_vertex_index = h.data(1)
+                        self._pre_drag_ann = copy.deepcopy(self._annotations[self._dragging_ann_index])
+                        return
 
         if self._current_tool == "rect":
             if event.button() == Qt.MouseButton.LeftButton:
@@ -181,15 +252,105 @@ class AnnotationScene(QGraphicsScene):
                 if self._current_kpt_count > 0 and len(self._keypoint_points) >= self._current_kpt_count:
                     self._finish_keypoint()
 
+        elif self._current_tool == TOOL_OBB:
+            # OBB 两次拖拽:第一次拖外接矩形,第二次在 OBB 内拖拽旋转
+            if self._obb_pending_index >= 0 and 0 <= self._obb_pending_index < len(self._annotations):
+                ann = self._annotations[self._obb_pending_index]
+                # 检查点击是否落在待旋转 OBB 内
+                if self._obb_polygon(ann).containsPoint(pos, Qt.FillRule.OddEvenFill):
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        # 进入旋转模式,记录起点角度与原始角度
+                        cx = ann.rect.center().x()
+                        cy = ann.rect.center().y()
+                        self._obb_rotation_start_angle = math.atan2(pos.y() - cy, pos.x() - cx)
+                        self._obb_rotation_orig_angle = ann.angle
+                        self._obb_rotating = True
+                        return
+                # 点击在 OBB 外 → 取消待旋转状态,开始绘制新外接矩形
+                self._obb_pending_index = -1
+                self._obb_rotating = False
+
+            if event.button() == Qt.MouseButton.LeftButton:
+                # 开始绘制外接矩形(同 rect 流程)
+                self._drawing = True
+                self._start_point = pos
+                color = QColor(self._get_color(self._current_class_index))
+                pen = QPen(color, 2)
+                self._temp_rect_item = QGraphicsRectItem(QRectF(pos, pos))
+                self._temp_rect_item.setPen(pen)
+                self.addItem(self._temp_rect_item)
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        pos = event.scenePos()
+        # 顶点拖拽中:更新被拖拽顶点位置并增量重绘
+        if self._vertex_dragging and 0 <= self._dragging_ann_index < len(self._annotations):
+            ann = self._annotations[self._dragging_ann_index]
+            poly = ann.polygon
+            new_poly = QPolygonF()
+            for i in range(poly.count()):
+                if i == self._dragging_vertex_index:
+                    new_poly.append(pos)
+                else:
+                    new_poly.append(poly.at(i))
+            ann.polygon = new_poly
+            self._redraw_at(self._dragging_ann_index)
+            self._hide_vertex_handles()
+            self._show_vertex_handles(self._dragging_ann_index)
+            return
+
+        # OBB 旋转中:基于鼠标相对中心的偏移角度更新 ann.angle
+        if self._obb_rotating and self._obb_pending_index >= 0 and 0 <= self._obb_pending_index < len(self._annotations):
+            ann = self._annotations[self._obb_pending_index]
+            cx = ann.rect.center().x()
+            cy = ann.rect.center().y()
+            cur_angle = math.atan2(pos.y() - cy, pos.x() - cx)
+            ann.angle = self._obb_rotation_orig_angle + (cur_angle - self._obb_rotation_start_angle)
+            self._redraw_at(self._obb_pending_index)
+            return
+
         if self._current_tool == "rect" and self._drawing and self._temp_rect_item is not None:
+            rect = QRectF(self._start_point, event.scenePos()).normalized()
+            self._temp_rect_item.setRect(rect)
+        elif self._current_tool == TOOL_OBB and self._drawing and self._temp_rect_item is not None:
             rect = QRectF(self._start_point, event.scenePos()).normalized()
             self._temp_rect_item.setRect(rect)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        # 顶点拖拽结束:压入 modify undo 栈
+        if self._vertex_dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._vertex_dragging = False
+            if 0 <= self._dragging_ann_index < len(self._annotations) and self._pre_drag_ann is not None:
+                new_ann = self._annotations[self._dragging_ann_index]
+                self._undo_stack.append(("modify", self._dragging_ann_index, self._pre_drag_ann, copy.deepcopy(new_ann)))
+                self._redo_stack.clear()
+                if len(self._undo_stack) > 50:
+                    self._undo_stack.pop(0)
+            self._pre_drag_ann = None
+            self._dragging_ann_index = -1
+            self._dragging_vertex_index = -1
+            self.annotations_changed.emit()
+            return
+
+        # OBB 旋转结束:压入 modify undo 栈,清除待旋转状态
+        if self._obb_rotating and event.button() == Qt.MouseButton.LeftButton and self._obb_pending_index >= 0:
+            self._obb_rotating = False
+            if 0 <= self._obb_pending_index < len(self._annotations):
+                ann = self._annotations[self._obb_pending_index]
+                # 用 angle=0 的副本作为 old_ann(创建时的初始状态)
+                old_ann = copy.deepcopy(ann)
+                old_ann.angle = 0.0
+                self._undo_stack.append(("modify", self._obb_pending_index, old_ann, copy.deepcopy(ann)))
+                self._redo_stack.clear()
+                if len(self._undo_stack) > 50:
+                    self._undo_stack.pop(0)
+                self._redraw_at(self._obb_pending_index)
+                self.annotations_changed.emit()
+            self._obb_pending_index = -1
+            return
+
         if self._current_tool == "rect" and self._drawing and event.button() == Qt.MouseButton.LeftButton:
             self._drawing = False
             if self._temp_rect_item is not None:
@@ -208,6 +369,30 @@ class AnnotationScene(QGraphicsScene):
                     self._redo_stack.clear()
                     if len(self._undo_stack) > 50:
                         self._undo_stack.pop(0)
+                    self.annotations_changed.emit()
+        elif self._current_tool == TOOL_OBB and self._drawing and event.button() == Qt.MouseButton.LeftButton:
+            # 第一次拖拽:完成外接矩形,创建 OBB 标注,进入待旋转状态
+            self._drawing = False
+            if self._temp_rect_item is not None:
+                rect = self._temp_rect_item.rect()
+                self.removeItem(self._temp_rect_item)
+                self._temp_rect_item = None
+                if rect.width() > 2 and rect.height() > 2:
+                    ann = AnnotationItem(
+                        class_index=self._current_class_index,
+                        rect=rect,
+                        item_type="obb",
+                        angle=0.0,
+                    )
+                    self._annotations.append(ann)
+                    new_index = len(self._annotations) - 1
+                    self._draw_annotation(ann, new_index)
+                    self._undo_stack.append(("add", new_index, ann))
+                    self._redo_stack.clear()
+                    if len(self._undo_stack) > 50:
+                        self._undo_stack.pop(0)
+                    # 进入待旋转状态,等待第二次拖拽
+                    self._obb_pending_index = new_index
                     self.annotations_changed.emit()
         super().mouseReleaseEvent(event)
 
@@ -233,6 +418,47 @@ class AnnotationScene(QGraphicsScene):
             if len(self._undo_stack) > 50:
                 self._undo_stack.pop(0)
             self.annotations_changed.emit()
+            return
+        # select 工具下双击多边形边 → 在最近的边上插入新顶点
+        if self._current_tool == TOOL_SELECT and self._selected_index >= 0:
+            ann = self._annotations[self._selected_index]
+            if ann.item_type == "polygon":
+                pos = event.scenePos()
+                best_edge_i = -1
+                best_dist = float("inf")
+                n = ann.polygon.count()
+                for i in range(n):
+                    p1 = ann.polygon.at(i)
+                    p2 = ann.polygon.at((i + 1) % n)
+                    dx, dy = p2.x() - p1.x(), p2.y() - p1.y()
+                    if dx == 0 and dy == 0:
+                        continue
+                    t = ((pos.x() - p1.x()) * dx + (pos.y() - p1.y()) * dy) / (dx * dx + dy * dy)
+                    t = max(0.0, min(1.0, t))
+                    proj_x = p1.x() + t * dx
+                    proj_y = p1.y() + t * dy
+                    dist = ((pos.x() - proj_x) ** 2 + (pos.y() - proj_y) ** 2) ** 0.5
+                    if dist < best_dist and dist < 10:  # 10px 容差
+                        best_dist = dist
+                        best_edge_i = i
+                if best_edge_i >= 0:
+                    old_ann = copy.deepcopy(ann)
+                    new_poly = QPolygonF()
+                    for i in range(n):
+                        new_poly.append(ann.polygon.at(i))
+                        if i == best_edge_i:
+                            new_poly.append(pos)
+                    ann.polygon = new_poly
+                    self._undo_stack.append(("modify", self._selected_index, old_ann, copy.deepcopy(ann)))
+                    self._redo_stack.clear()
+                    if len(self._undo_stack) > 50:
+                        self._undo_stack.pop(0)
+                    self._redraw_at(self._selected_index)
+                    self._hide_vertex_handles()
+                    self._show_vertex_handles(self._selected_index)
+                    self.annotations_changed.emit()
+                    event.accept()
+                    return
         super().mouseDoubleClickEvent(event)
 
     def _update_temp_polygon(self) -> None:
@@ -360,6 +586,9 @@ class AnnotationScene(QGraphicsScene):
             elif ann.item_type == "keypoint" and ann.rect.contains(pos):
                 self._selected_index = i
                 break
+            elif ann.item_type == "obb" and self._obb_polygon(ann).containsPoint(pos, Qt.FillRule.OddEvenFill):
+                self._selected_index = i
+                break
 
         if old_index == self._selected_index:
             return
@@ -379,6 +608,16 @@ class AnnotationScene(QGraphicsScene):
             for item in self._graphics_items[self._selected_index]:
                 if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem)):
                     item.setPen(pen)
+
+        # 选中状态变化后,根据新选中是否为 polygon 显示/隐藏顶点句柄
+        if self._selected_index != -1:
+            ann = self._annotations[self._selected_index]
+            if ann.item_type == "polygon":
+                self._show_vertex_handles(self._selected_index)
+            else:
+                self._hide_vertex_handles()
+        else:
+            self._hide_vertex_handles()
 
     def _draw_annotation(self, ann: AnnotationItem, index: int) -> None:
         color = QColor(self._get_color(ann.class_index))
@@ -434,13 +673,27 @@ class AnnotationScene(QGraphicsScene):
                     line = self.addLine(prev.x(), prev.y(), kp.x(), kp.y(), QPen(color, 2))
                     line.setData(0, index)
                     items_added.append(line)
+        elif ann.item_type == "obb":
+            # OBB:用 QPolygonF 表示旋转后的四个角点
+            poly = self._obb_polygon(ann)
+            item = QGraphicsPolygonItem(poly)
+            item.setPen(pen)
+            brush = QBrush(QColor(color.red(), color.green(), color.blue(), 40))
+            item.setBrush(brush)
+            item.setData(0, index)
+            self.addItem(item)
+            items_added.append(item)
 
         name = self._class_names[ann.class_index] if 0 <= ann.class_index < len(self._class_names) else str(ann.class_index)
         label_text = name
         label = QGraphicsTextItem(label_text)
         label.setDefaultTextColor(color)
-        pos_x = ann.rect.left() if ann.item_type == "rect" else ann.polygon.boundingRect().left()
-        pos_y = (ann.rect.top() - 20) if ann.item_type == "rect" else (ann.polygon.boundingRect().top() - 20)
+        if ann.item_type == "rect" or ann.item_type == "obb":
+            pos_x = ann.rect.left()
+            pos_y = ann.rect.top() - 20
+        else:
+            pos_x = ann.polygon.boundingRect().left()
+            pos_y = ann.polygon.boundingRect().top() - 20
         label.setPos(pos_x, pos_y)
         label.setData(0, index)
         self.addItem(label)
@@ -456,56 +709,132 @@ class AnnotationScene(QGraphicsScene):
                 self.removeItem(item)
             self._graphics_items[index] = None
 
+    def _obb_polygon(self, ann: AnnotationItem) -> QPolygonF:
+        """计算 OBB 旋转后的四个角点构成的多边形(与 _draw_annotation 中绘制逻辑一致)"""
+        cx, cy = ann.rect.center().x(), ann.rect.center().y()
+        w, h = ann.rect.width(), ann.rect.height()
+        angle = ann.angle
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        hw, hh = w / 2, h / 2
+        # 四个角点(相对中心)经旋转矩阵后加回中心
+        corners = [
+            QPointF(cx + (-hw * cos_a - -hh * sin_a), cy + (-hw * sin_a + -hh * cos_a)),
+            QPointF(cx + (hw * cos_a - -hh * sin_a), cy + (hw * sin_a + -hh * cos_a)),
+            QPointF(cx + (hw * cos_a - hh * sin_a), cy + (hw * sin_a + hh * cos_a)),
+            QPointF(cx + (-hw * cos_a - hh * sin_a), cy + (-hw * sin_a + hh * cos_a)),
+        ]
+        return QPolygonF(corners)
+
+    def _show_vertex_handles(self, ann_index: int) -> None:
+        """选中多边形时显示其所有顶点句柄"""
+        self._hide_vertex_handles()
+        if not (0 <= ann_index < len(self._annotations)):
+            return
+        ann = self._annotations[ann_index]
+        if ann.item_type != "polygon":
+            return
+        color = QColor(self._get_color(ann.class_index))
+        for vi in range(ann.polygon.count()):
+            pt = ann.polygon.at(vi)
+            radius = 5
+            ellipse = QGraphicsEllipseItem(pt.x() - radius, pt.y() - radius, radius * 2, radius * 2)
+            ellipse.setBrush(QBrush(QColor(255, 255, 255)))
+            ellipse.setPen(QPen(color, 2))
+            ellipse.setData(0, ann_index)
+            ellipse.setData(1, vi)  # 顶点索引
+            self.addItem(ellipse)
+            self._vertex_handles.append(ellipse)
+
+    def _hide_vertex_handles(self) -> None:
+        """移除所有顶点句柄"""
+        for h in self._vertex_handles:
+            self.removeItem(h)
+        self._vertex_handles.clear()
+
+    def _redraw_at(self, index: int) -> None:
+        """仅重绘单个 index 的标注(增量优化,避免全场景重绘)"""
+        self._remove_annotation_graphics(index)
+        if 0 <= index < len(self._annotations):
+            self._draw_annotation(self._annotations[index], index)
+
     def _redraw_all(self) -> None:
-        # 优先遍历 _graphics_items 精确移除标注图元
+        # 遍历 _graphics_items 精确移除标注图元
         for items in self._graphics_items:
             if items is None:
                 continue
             for item in items:
                 self.removeItem(item)
         self._graphics_items.clear()
-        # 兜底:扫描全场景移除可能残留的标注图元(含骨架线)
-        for item in self.items():
-            if isinstance(item, (QGraphicsRectItem, QGraphicsPolygonItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsLineItem)):
-                self.removeItem(item)
+        # 隐藏顶点句柄(全场景重绘会重建)
+        self._hide_vertex_handles()
         for i, ann in enumerate(self._annotations):
             self._draw_annotation(ann, i)
 
     def undo(self) -> None:
         if not self._undo_stack:
             return
-        action_type, index, ann = self._undo_stack.pop()
-        if action_type == "add":
+        entry = self._undo_stack.pop()
+        action_type = entry[0]
+        if action_type == "modify":
+            # modify 用 4 元组:("modify", index, old_ann, new_ann)
+            index, old_ann, new_ann = entry[1], entry[2], entry[3]
             if 0 <= index < len(self._annotations):
-                self._annotations.pop(index)
-            self._selected_index = -1
-            self._redraw_all()
-            self.annotations_changed.emit()
-            self._redo_stack.append(("delete", index, ann))
-        elif action_type == "delete":
-            self._annotations.insert(index, ann)
-            self._selected_index = -1
-            self._redraw_all()
-            self.annotations_changed.emit()
-            self._redo_stack.append(("add", index, ann))
+                self._annotations[index] = old_ann
+                self._redraw_at(index)
+                self._hide_vertex_handles()
+                if 0 <= self._selected_index == index and old_ann.item_type == "polygon":
+                    self._show_vertex_handles(index)
+                self.annotations_changed.emit()
+                self._redo_stack.append(("modify", index, old_ann, new_ann))
+        else:
+            # add/delete 用 3 元组:("add"/"delete", index, ann)
+            index, ann = entry[1], entry[2]
+            if action_type == "add":
+                if 0 <= index < len(self._annotations):
+                    self._annotations.pop(index)
+                self._selected_index = -1
+                self._redraw_all()
+                self.annotations_changed.emit()
+                self._redo_stack.append(("delete", index, ann))
+            elif action_type == "delete":
+                self._annotations.insert(index, ann)
+                self._selected_index = -1
+                self._redraw_all()
+                self.annotations_changed.emit()
+                self._redo_stack.append(("add", index, ann))
 
     def redo(self) -> None:
         if not self._redo_stack:
             return
-        action_type, index, ann = self._redo_stack.pop()
-        if action_type == "add":
-            self._annotations.insert(index, ann)
-            self._selected_index = -1
-            self._redraw_all()
-            self.annotations_changed.emit()
-            self._undo_stack.append(("delete", index, ann))
-        elif action_type == "delete":
+        entry = self._redo_stack.pop()
+        action_type = entry[0]
+        if action_type == "modify":
+            # modify 用 4 元组:("modify", index, old_ann, new_ann)
+            index, old_ann, new_ann = entry[1], entry[2], entry[3]
             if 0 <= index < len(self._annotations):
-                self._annotations.pop(index)
-            self._selected_index = -1
-            self._redraw_all()
-            self.annotations_changed.emit()
-            self._undo_stack.append(("add", index, ann))
+                self._annotations[index] = new_ann
+                self._redraw_at(index)
+                self._hide_vertex_handles()
+                if 0 <= self._selected_index == index and new_ann.item_type == "polygon":
+                    self._show_vertex_handles(index)
+                self.annotations_changed.emit()
+                self._undo_stack.append(("modify", index, old_ann, new_ann))
+        else:
+            # add/delete 用 3 元组:("add"/"delete", index, ann)
+            index, ann = entry[1], entry[2]
+            if action_type == "add":
+                self._annotations.insert(index, ann)
+                self._selected_index = -1
+                self._redraw_all()
+                self.annotations_changed.emit()
+                self._undo_stack.append(("delete", index, ann))
+            elif action_type == "delete":
+                if 0 <= index < len(self._annotations):
+                    self._annotations.pop(index)
+                self._selected_index = -1
+                self._redraw_all()
+                self.annotations_changed.emit()
+                self._undo_stack.append(("add", index, ann))
 
     def delete_selected(self) -> None:
         if 0 <= self._selected_index < len(self._annotations):

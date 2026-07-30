@@ -410,18 +410,21 @@ class _ThumbnailWorker(QThread):
         self._stop_flag = False
 
     def stop(self) -> None:
-        # 仅设置停止标志，不调用 quit()（对自定义 run() 无事件循环无效）。
-        # 等待逻辑交由调用方统一处理，避免 wait 超时后线程仍在运行。
         self._stop_flag = True
 
     def run(self) -> None:
+        from PyQt6.QtGui import QImageReader
         for row, path in self._items:
             if self._stop_flag:
                 break
-            pixmap = QPixmap(path)
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self.thumbnail_ready.emit(row, scaled)
+            # 使用 QImageReader 提前设置缩放尺寸，避免全分辨率解码后再缩放
+            reader = QImageReader(path)
+            if reader.canRead():
+                reader.setScaledSize(QSize(64, 64))
+                img = reader.read()
+                if not img.isNull():
+                    pixmap = QPixmap.fromImage(img)
+                    self.thumbnail_ready.emit(row, pixmap)
 
 
 class AnnotateWidget(QWidget):
@@ -590,6 +593,11 @@ class AnnotateWidget(QWidget):
         self._btn_rect.setChecked(True)
         self._btn_rect.setIcon(self._load_icon("tool-rect"))
         self._btn_rect.setIconSize(icon_size)
+        self._btn_obb = QPushButton("OBB 旋转框")
+        self._btn_obb.setCheckable(True)
+        self._btn_obb.setToolTip("OBB 旋转框标注工具 (O)")
+        self._btn_obb.setIcon(self._load_icon("tool-rect"))
+        self._btn_obb.setIconSize(icon_size)
         self._btn_polygon = QPushButton("多边形标注")
         self._btn_polygon.setCheckable(True)
         self._btn_polygon.setIcon(self._load_icon("tool-polygon"))
@@ -604,6 +612,7 @@ class AnnotateWidget(QWidget):
         self._btn_select.setIcon(self._load_icon("tool-select"))
         self._btn_select.setIconSize(icon_size)
         toolbar_layout.addWidget(self._btn_rect)
+        toolbar_layout.addWidget(self._btn_obb)
         toolbar_layout.addWidget(self._btn_polygon)
         toolbar_layout.addWidget(self._btn_keypoint)
         toolbar_layout.addWidget(self._btn_select)
@@ -717,6 +726,7 @@ class AnnotateWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self._btn_rect.clicked.connect(lambda: self._set_tool("rect"))
+        self._btn_obb.clicked.connect(lambda: self._set_tool("obb"))
         self._btn_polygon.clicked.connect(lambda: self._set_tool("polygon"))
         self._btn_keypoint.clicked.connect(lambda: self._set_tool("keypoint"))
         self._btn_select.clicked.connect(lambda: self._set_tool("select"))
@@ -746,6 +756,27 @@ class AnnotateWidget(QWidget):
         self._delete_shortcut.setAutoRepeat(False)
         self._delete_shortcut.activated.connect(self._delete_selected)
 
+        # 工具切换快捷键:R=矩形 / P=多边形 / O=OBB / K=关键点 / S=选择
+        self._rect_tool_shortcut = QShortcut(QKeySequence("R"), self)
+        self._rect_tool_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._rect_tool_shortcut.activated.connect(lambda: self._set_tool("rect"))
+
+        self._polygon_tool_shortcut = QShortcut(QKeySequence("P"), self)
+        self._polygon_tool_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._polygon_tool_shortcut.activated.connect(lambda: self._set_tool("polygon"))
+
+        self._obb_tool_shortcut = QShortcut(QKeySequence("O"), self)
+        self._obb_tool_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._obb_tool_shortcut.activated.connect(lambda: self._set_tool("obb"))
+
+        self._keypoint_tool_shortcut = QShortcut(QKeySequence("K"), self)
+        self._keypoint_tool_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._keypoint_tool_shortcut.activated.connect(lambda: self._set_tool("keypoint"))
+
+        self._select_tool_shortcut = QShortcut(QKeySequence("S"), self)
+        self._select_tool_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._select_tool_shortcut.activated.connect(lambda: self._set_tool("select"))
+
     def _on_annotations_changed(self) -> None:
         self._save_current_annotations()
         self._schedule_autosave()
@@ -760,49 +791,37 @@ class AnnotateWidget(QWidget):
         self._save_annotations_to_project()
 
     def stop_background_threads(self) -> None:
-        """停止所有后台线程（缩略图、SAM、批量检测等），用于窗口关闭前清理。"""
+        """停止所有后台线程（缩略图、SAM、批量检测等），用于窗口关闭前清理。
+
+        先对所有 worker 发出停止信号，再并行等待，避免串行等待导致的超时叠加。
+        """
         self._stop_thumb_worker()
+        # 收集所有需要停止的 worker
+        workers = []
         if self._sam_worker is not None:
-            try:
-                if self._sam_worker.isRunning():
-                    self._sam_worker.wait(5000)
-                    if self._sam_worker.isRunning():
-                        try:
-                            self._sam_worker.disconnect()
-                        except (RuntimeError, TypeError):
-                            pass
-                        logger.warning("警告: SAM worker 5 秒内未退出,已断开信号连接")
-            except RuntimeError:
-                pass
-            self._sam_worker = None
+            workers.append(("SAM", self._sam_worker))
         if self._batch_worker is not None:
-            try:
-                self._batch_worker.stop()
-                if self._batch_worker.isRunning():
-                    self._batch_worker.wait(5000)
-                    if self._batch_worker.isRunning():
-                        try:
-                            self._batch_worker.disconnect()
-                        except (RuntimeError, TypeError):
-                            pass
-                        logger.warning("警告: 批量检测 worker 5 秒内未退出,已断开信号连接")
-            except RuntimeError:
-                pass
-            self._batch_worker = None
+            self._batch_worker.stop()
+            workers.append(("批量检测", self._batch_worker))
         if self._yolo_sam_worker is not None:
+            self._yolo_sam_worker.stop()
+            workers.append(("YOLO+SAM2", self._yolo_sam_worker))
+        # 并行等待：先对所有 worker 发出 stop，再统一等待
+        for name, w in workers:
             try:
-                self._yolo_sam_worker.stop()
-                if self._yolo_sam_worker.isRunning():
-                    self._yolo_sam_worker.wait(5000)
-                    if self._yolo_sam_worker.isRunning():
+                if w.isRunning():
+                    w.wait(3000)
+                    if w.isRunning():
                         try:
-                            self._yolo_sam_worker.disconnect()
+                            w.disconnect()
                         except (RuntimeError, TypeError):
                             pass
-                        logger.warning("警告: YOLO+SAM2 worker 5 秒内未退出,已断开信号连接")
+                        logger.warning("警告: %s worker 3 秒内未退出,已断开信号连接", name)
             except RuntimeError:
                 pass
-            self._yolo_sam_worker = None
+        self._sam_worker = None
+        self._batch_worker = None
+        self._yolo_sam_worker = None
 
     def _go_to_next_image(self) -> None:
         if QApplication.activeModalWidget() is not None:
@@ -819,6 +838,7 @@ class AnnotateWidget(QWidget):
 
     def _set_tool(self, tool: str) -> None:
         self._btn_rect.setChecked(tool == "rect")
+        self._btn_obb.setChecked(tool == "obb")
         self._btn_polygon.setChecked(tool == "polygon")
         self._btn_keypoint.setChecked(tool == "keypoint")
         self._btn_select.setChecked(tool == "select")
@@ -1138,8 +1158,7 @@ class AnnotateWidget(QWidget):
         try:
             worker.stop()
             if worker.isRunning():
-                # 完整等待，避免超时返回后线程仍在运行
-                worker.wait(10000)
+                worker.wait(3000)
         except RuntimeError:
             pass
 
@@ -1642,12 +1661,23 @@ class AnnotateWidget(QWidget):
             for anns in self._annotations_dict.values()
             for a in anns
         )
+        has_obb = any(
+            a.item_type == "obb"
+            for anns in self._annotations_dict.values()
+            for a in anns
+        )
         task = "detect"
-        if has_polygon:
-            items = ["detect — 多边形自动转为矩形框", "segment — 保留多边形用于分割训练", "pose — 关键点姿态格式", "classify — 分类任务（使用目录结构）"]
+        if has_polygon or has_obb:
+            items = [
+                "detect — 多边形自动转为矩形框",
+                "segment — 保留多边形用于分割训练",
+                "pose — 关键点姿态格式",
+                "obb — 旋转框格式 (cx cy w h angle)",
+                "classify — 分类任务（使用目录结构）",
+            ]
             item, ok = QInputDialog.getItem(
                 self, "选择导出格式",
-                "检测到多边形标注，请选择导出格式：",
+                "检测到多边形或 OBB 标注，请选择导出格式：",
                 items, 0, False,
             )
             if not ok:
@@ -1667,6 +1697,8 @@ class AnnotateWidget(QWidget):
                         flip_idx = None  # 用户取消，不配置 flip_idx
                 else:
                     flip_idx = None
+            elif "obb" in item:
+                task = "obb"
             elif "classify" in item:
                 task = "classify"
                 QMessageBox.information(
@@ -1749,6 +1781,10 @@ class AnnotateWidget(QWidget):
                 d = {"class_index": ann.class_index, "item_type": ann.item_type}
                 if ann.item_type == "rect" and ann.rect is not None:
                     d["rect"] = [ann.rect.x(), ann.rect.y(), ann.rect.width(), ann.rect.height()]
+                elif ann.item_type == "obb" and ann.rect is not None:
+                    # OBB 旋转框:存储外接矩形 + angle(弧度)
+                    d["rect"] = [ann.rect.x(), ann.rect.y(), ann.rect.width(), ann.rect.height()]
+                    d["angle"] = ann.angle
                 elif ann.item_type == "polygon" and ann.polygon is not None:
                     d["polygon"] = [[ann.polygon.at(i).x(), ann.polygon.at(i).y()]
                                     for i in range(ann.polygon.size())]
@@ -1785,12 +1821,15 @@ class AnnotateWidget(QWidget):
                     for pt in d["polygon"]:
                         polygon.append(QPointF(pt[0], pt[1]))
                 keypoints = [QPointF(pt[0], pt[1]) for pt in d.get("keypoints", [])]
+                # OBB 类型读取 angle(弧度),向后兼容老数据默认 0.0
+                angle = d.get("angle", 0.0) if d.get("item_type") == "obb" else 0.0
                 anns.append(AnnotationItem(
                     class_index=d.get("class_index", 0),
                     rect=rect,
                     polygon=polygon if "polygon" in d else QPolygonF(),
                     item_type=d.get("item_type", "rect"),
                     keypoints=keypoints,
+                    angle=angle,
                 ))
             self._annotations_dict[path] = anns
         self._image_list_widget.clear()
@@ -1818,6 +1857,10 @@ class AnnotateWidget(QWidget):
                 d = {"class_index": ann.class_index, "item_type": ann.item_type}
                 if ann.item_type == "rect" and ann.rect is not None:
                     d["rect"] = [ann.rect.x(), ann.rect.y(), ann.rect.width(), ann.rect.height()]
+                elif ann.item_type == "obb" and ann.rect is not None:
+                    # OBB 旋转框:存储外接矩形 + angle(弧度)
+                    d["rect"] = [ann.rect.x(), ann.rect.y(), ann.rect.width(), ann.rect.height()]
+                    d["angle"] = ann.angle
                 elif ann.item_type == "polygon" and ann.polygon is not None:
                     d["polygon"] = [[ann.polygon.at(i).x(), ann.polygon.at(i).y()]
                                     for i in range(ann.polygon.size())]
@@ -1873,7 +1916,30 @@ class AnnotateWidget(QWidget):
                 restored_list.append(os.path.join(project_path, p))
         image_list = restored_list
         annotations_data = data.get("annotations", {})
-        valid_images = [p for p in image_list if os.path.isfile(p)]
+        # 批量收集所有需要检查的路径，一次性去重后用 os.scandir 批量验证，
+        # 避免 N+M 次独立 os.path.isfile 调用（每次都是独立系统调用）。
+        all_paths_to_check = set(image_list)
+        for path in annotations_data.keys():
+            if os.path.isabs(path):
+                all_paths_to_check.add(path)
+            else:
+                all_paths_to_check.add(os.path.join(project_path, path))
+        existing_files: set = set()
+        if all_paths_to_check:
+            # 按父目录分组，用 os.scandir 一次列出目录内容
+            dir_groups: dict = {}
+            for p in all_paths_to_check:
+                parent = os.path.dirname(p)
+                dir_groups.setdefault(parent, []).append(os.path.basename(p))
+            for dir_path, basenames in dir_groups.items():
+                try:
+                    existing_in_dir = {entry.name for entry in os.scandir(dir_path) if entry.is_file()}
+                    for bn in basenames:
+                        if bn in existing_in_dir:
+                            existing_files.add(os.path.join(dir_path, bn))
+                except OSError:
+                    pass
+        valid_images = [p for p in image_list if p in existing_files]
         self._image_list = valid_images
         self._annotations_dict.clear()
         for path, items in annotations_data.items():
@@ -1881,7 +1947,7 @@ class AnnotateWidget(QWidget):
                 abs_path = path
             else:
                 abs_path = os.path.join(project_path, path)
-            if not os.path.isfile(abs_path):
+            if abs_path not in existing_files:
                 continue
             anns: List[AnnotationItem] = []
             for d in items:
@@ -1891,12 +1957,15 @@ class AnnotateWidget(QWidget):
                     for pt in d["polygon"]:
                         polygon.append(QPointF(pt[0], pt[1]))
                 keypoints = [QPointF(pt[0], pt[1]) for pt in d.get("keypoints", [])]
+                # OBB 类型读取 angle(弧度),向后兼容老数据默认 0.0
+                angle = d.get("angle", 0.0) if d.get("item_type") == "obb" else 0.0
                 anns.append(AnnotationItem(
                     class_index=d.get("class_index", 0),
                     rect=rect,
                     polygon=polygon if "polygon" in d else QPolygonF(),
                     item_type=d.get("item_type", "rect"),
                     keypoints=keypoints,
+                    angle=angle,
                 ))
             self._annotations_dict[abs_path] = anns
         self._image_list_widget.clear()

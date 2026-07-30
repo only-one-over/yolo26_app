@@ -1,973 +1,961 @@
-# YOLO26 App Code Wiki
+# YOLO26 App — Code Wiki
 
-## 项目概述
-
-YOLO26 App 是一个基于 Ultralytics YOLO26 的桌面端标注-训练-推理一体化应用，使用 PyQt6 构建 GUI，提供了从数据标注、模型训练到推理测试的完整工作流。
+> 基于 Ultralytics YOLO 的桌面端标注-训练-推理一体化应用（支持 YOLO26 / YOLOv8）
 
 ---
 
-## 目录结构
+## 目录
+
+- [1. 项目概述](#1-项目概述)
+- [2. 项目架构](#2-项目架构)
+- [3. 目录结构](#3-目录结构)
+- [4. 核心模块详解](#4-核心模块详解)
+  - [4.1 入口层](#41-入口层)
+  - [4.2 核心业务层 (core/)](#42-核心业务层-core)
+  - [4.3 UI 表现层 (ui/)](#43-ui-表现层-ui)
+- [5. 关键类与函数说明](#5-关键类与函数说明)
+- [6. 依赖关系](#6-依赖关系)
+- [7. 项目运行方式](#7-项目运行方式)
+- [8. 配置系统](#8-配置系统)
+- [9. 数据流与持久化](#9-数据流与持久化)
+- [10. 线程模型](#10-线程模型)
+- [11. 样式系统](#11-样式系统)
+- [12. 工程约定与最佳实践](#12-工程约定与最佳实践)
+
+---
+
+## 1. 项目概述
+
+YOLO26 App 是一款基于 PyQt6 构建的桌面应用程序，将 YOLO 目标检测工作流的三大核心环节——**数据标注、模型训练、推理测试**——整合到统一的图形界面中。项目支持 YOLO26 和 YOLOv8 两大模型系列，覆盖检测（detect）、分割（segment）、分类（classify）、关键点（pose）、旋转框（obb）五类任务。
+
+### 核心能力
+
+| 能力域 | 功能 |
+|--------|------|
+| 数据标注 | 矩形框、多边形、关键点、OBB 旋转框标注；SAM2 交互式分割；Grounding DINO 零样本检测；YOLO+SAM2 批量自动标注流水线；撤销/重做；自动持久化 |
+| 模型训练 | 多任务/多模型系列训练；数据增强预设系统；实时进度与日志；训练曲线可视化；可中断训练 |
+| 推理测试 | 图片/视频/摄像头/RealSense 多源推理；模型验证（mAP 等）；多格式模型导出（ONNX/TensorRT/OpenVINO 等）；ONNX GPU/CPU 自动回退 |
+| 工程化 | 原子写入防损坏；全局异常处理与崩溃恢复；GPU 子进程检测与缓存；统一日志体系；暗/亮双主题 |
+
+---
+
+## 2. 项目架构
+
+### 2.1 三层分层架构
 
 ```
-yolo26_app/
-├── main.py                          # 应用入口文件
-├── pyproject.toml                   # 项目配置文件
-├── requirements.txt                 # 依赖清单
-├── LICENSE                          # MIT 许可证
-├── README.md                        # 项目说明文档
-└── yolo26_app/                      # 应用主包
-    ├── __init__.py                  # 包初始化文件
-    ├── core/                        # 核心业务逻辑模块
-    │   ├── __init__.py
-    │   ├── config.py                # 数据模型定义
-    │   ├── project_manager.py       # 项目管理
-    │   ├── label_manager.py         # 标注类别管理
-    │   ├── annotation_canvas.py     # 标注画布组件
-    │   ├── yolo_exporter.py         # YOLO 数据集导出
-    │   ├── trainer.py               # YOLO 训练器
-    │   ├── predictor.py             # YOLO 推理器
-    │   ├── auto_annotator.py        # 自动标注工具
-    │   └── realsense_camera.py      # RealSense 深度相机
-    └── ui/                          # 用户界面模块
-        ├── __init__.py
-        ├── main_window.py           # 主窗口
-        ├── annotate_widget.py       # 标注模块界面
-        ├── train_widget.py          # 训练模块界面
-        ├── test_widget.py           # 测试模块界面
-        └── styles.py                # QSS 样式表
+┌─────────────────────────────────────────────────────┐
+│                    UI 表现层 (ui/)                    │
+│  MainWindow · AnnotateWidget · TrainWidget · TestWidget  │
+│  ExportDialog · styles.py                            │
+├─────────────────────────────────────────────────────┤
+│                  核心业务层 (core/)                    │
+│  配置管理 │ 标注画布 │ 训练器 │ 推理器 │ 自动标注器     │
+│  数据集导出 │ 项目管理 │ 工作区管理 │ GPU检测 │ 日志     │
+│  异常处理 │ RealSense │ 任务管理 │ 持久化 │ 标签管理    │
+├─────────────────────────────────────────────────────┤
+│                    基础设施层                         │
+│  Ultralytics YOLO │ PyQt6 │ OpenCV │ PyTorch        │
+│  SAM2 (可选) │ Grounding DINO (可选) │ pyrealsense2  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 2.2 架构设计原则
+
+- **关注点分离**：UI 层只负责交互与展示，核心业务逻辑全部封装在 `core/` 中，两者通过信号/槽和直接方法调用通信。
+- **代码核心隔离**：所有功能代码集中在 `code/` 文件夹下，用户更新项目时只需替换此目录。
+- **原子写入**：关键配置文件（`project_config.json`、`annotations.json`）使用 `QSaveFile` 或临时文件 + `os.replace` 模式写入，杜绝中途崩溃导致的文件损坏。
+- **异步非阻塞**：所有耗时操作（训练、推理、模型加载、GPU 检测）在 QThread 中执行，UI 保持响应。
+- **优雅降级**：可选依赖（SAM2、Grounding DINO、RealSense、TensorRT）采用 try-import 模式，缺失时功能不可用但不影响应用启动。
+
+### 2.3 模块依赖关系图
+
+```
+main.py
+  └── ui/main_window.py (MainWindow)
+        ├── ui/annotation.py (AnnotateWidget)
+        │     ├── core/annotation_canvas.py (AnnotationScene, AnnotationView, AnnotationItem)
+        │     ├── core/label_manager.py (LabelManager)
+        │     ├── core/auto_annotator.py (YOLOPreAnnotator, SAMAnnotator, GroundingDINOAnnotator)
+        │     ├── core/yolo_exporter.py (YOLOExporter)
+        │     ├── core/persistence.py (write_json_atomic)
+        │     └── core/utils/common.py (imread_unicode, imwrite_unicode)
+        ├── ui/training.py (TrainWidget)
+        │     ├── core/trainer.py (YOLOTrainer)
+        │     ├── core/model_registry.py (MODEL_FAMILY_TASK_MODEL_MAP, AUGMENTATION_PRESETS)
+        │     └── core/config.py (TrainConfig)
+        ├── ui/inference.py (TestWidget)
+        │     ├── core/predictor.py (YOLOPredictor)
+        │     ├── core/realsense_camera.py (RealSenseCamera)
+        │     └── ui/export_dialog.py (ExportDialog)
+        ├── core/project_manager.py (ProjectManager)
+        ├── core/workspace_manager.py (WorkspaceManager)
+        ├── core/gpu_detector.py (GPUDetectWorker)
+        ├── core/paths.py (路径常量)
+        └── core/config.py (ProjectConfig)
+  └── core/logger.py (init_logging, get_logger)
+  └── core/exception_handler.py (install_exception_hooks)
 ```
 
 ---
 
-## 整体架构
-
-### 架构分层
+## 3. 目录结构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      UI Layer (ui/)                         │
-│  ┌──────────────┬──────────────┬──────────────┐             │
-│  │AnnotateWidget│  TrainWidget  │  TestWidget │             │
-│  └──────────────┴──────────────┴──────────────┘             │
-│                      MainWindow                              │
-├─────────────────────────────────────────────────────────────┤
-│                   Business Logic Layer (core/)                │
-│  ┌────────────┬────────────┬────────────┬────────────┐        │
-│  │Annotation  │  Trainer   │ Predictor  │ YOLO      │        │
-│  │Canvas      │  (QThread) │            │ Exporter  │        │
-│  └────────────┴────────────┴────────────┴────────────┘        │
-│  ┌────────────┬────────────┬────────────┬────────────┐        │
-│  │Label       │  Project   │Auto        │RealSense   │        │
-│  │Manager     │  Manager   │Annotator   │Camera      │        │
-│  └────────────┴────────────┴────────────┴────────────┘        │
-├─────────────────────────────────────────────────────────────┤
-│                    Data Model Layer (config.py)               │
-│  ┌──────────────┬──────────────┬──────────────┐             │
-│  │  ClassItem  │ TrainConfig  │ProjectConfig│             │
-│  └──────────────┴──────────────┴──────────────┘             │
-├─────────────────────────────────────────────────────────────┤
-│                   External Libraries                          │
-│  Ultralytics YOLO26 | PyQt6 | OpenCV | PyTorch | NumPy      │
-└─────────────────────────────────────────────────────────────┘
+ultralytics-main/
+├── main.py                      # 应用入口
+├── pyproject.toml               # 项目元数据与依赖声明
+├── requirements.txt             # 核心依赖（pip install -r）
+├── requirements-lock.txt        # 锁定版依赖（生产环境推荐）
+├── install.bat                  # Windows 一键安装脚本
+├── install.sh                   # Linux/macOS 一键安装脚本
+├── README.md                    # 中文文档
+├── README_EN.md                 # 英文文档
+├── LICENSE                      # MIT 许可证
+├── .gitignore                   # Git 忽略规则
+│
+├── code/                        # ★ 代码核心目录（用户更新只需替换此目录）
+│   └── yolo26_app/
+│       ├── __init__.py
+│       ├── core/                # 核心业务逻辑
+│       │   ├── __init__.py
+│       │   ├── config.py            # 数据类: ClassItem, TrainConfig, ProjectConfig
+│       │   ├── paths.py             # 工作区路径常量与目录初始化
+│       │   ├── project_manager.py   # 项目创建/打开/最近项目
+│       │   ├── workspace_manager.py # 工作区间扫描/创建/校验
+│       │   ├── annotation_canvas.py # 标注场景与视图 (QGraphicsScene/View)
+│       │   ├── label_manager.py     # 类别标签管理
+│       │   ├── trainer.py           # YOLO 训练 QThread
+│       │   ├── predictor.py         # YOLO 推理/验证/导出
+│       │   ├── auto_annotator.py    # AI 辅助标注 (YOLO/SAM2/GroundingDINO)
+│       │   ├── yolo_exporter.py     # 数据集导出 (YOLO 格式)
+│       │   ├── model_registry.py    # 模型家族模板与增强预设常量
+│       │   ├── persistence.py       # 原子 JSON 写入 (QSaveFile)
+│       │   ├── gpu_detector.py      # GPU 子进程检测与缓存
+│       │   ├── logger.py            # 统一日志体系
+│       │   ├── exception_handler.py # 全局异常处理与崩溃恢复
+│       │   ├── task_manager.py      # 通用异步任务管理器
+│       │   ├── realsense_camera.py  # Intel RealSense 深度相机封装
+│       │   ├── config_template.yaml # 默认配置模板（参考文档）
+│       │   └── utils/
+│       │       ├── __init__.py
+│       │       └── common.py        # 通用工具: 中文路径图像读写
+│       │
+│       └── ui/                  # UI 表现层
+│           ├── __init__.py
+│           ├── main_window.py       # 主窗口 (导航/工作区/页面切换)
+│           ├── annotation.py        # 标注页面
+│           ├── training.py          # 训练页面
+│           ├── inference.py         # 推理/测试页面
+│           ├── export_dialog.py     # 模型导出对话框
+│           ├── styles.py            # 设计令牌与 QSS 样式表
+│           └── icons/               # SVG 图标资源
+│
+├── system_model/               # 系统模型目录（预训练/SAM2/GroundingDINO）
+│   ├── yolo/                    #   YOLO 预训练权重
+│   ├── sam2/                    #   SAM2 模型
+│   ├── grounding_dino/          #   GroundingDINO 模型
+│   └── user_trained/            #   用户训练产出的模型
+│
+├── my_project/                 # 用户工作区根目录
+│   └── default/                 #   默认工作区间（自由空间模式回退）
+│       └── (project_config.json, images/, datasets/, models/, runs/)
+│
+├── datasets/                   # 数据集输出目录
+├── runs/                       # 训练输出目录
+└── logs/                       # 运行日志（按日期切割，保留 7 天）
 ```
-
-### 模块职责划分
-
-| 模块 | 职责 | 主要类 |
-|------|------|--------|
-| **ui/** | 用户界面层，负责GUI展示和用户交互 | MainWindow, AnnotateWidget, TrainWidget, TestWidget |
-| **core/** | 核心业务逻辑层，处理数据和算法 | AnnotationCanvas, YOLOTrainer, YOLOPredictor, YOLOExporter |
-| **core/config.py** | 数据模型层，定义数据结构 | ClassItem, TrainConfig, ProjectConfig |
 
 ---
 
-## 核心模块详解
+## 4. 核心模块详解
 
-### 1. UI 模块 (yolo26_app/ui/)
+### 4.1 入口层
 
-#### 1.1 MainWindow (main_window.py)
+#### `main.py`
 
-主窗口类，负责应用的整体布局和导航。
+应用入口点，职责简洁明确：
 
-**关键属性：**
-- `current_project_config: Optional[ProjectConfig]` - 当前项目配置
-- `annotate_widget: AnnotateWidget` - 标注模块实例
-- `train_widget: TrainWidget` - 训练模块实例
-- `test_widget: TestWidget` - 测试模块实例
-- `nav_buttons: List[QPushButton]` - 导航按钮列表
+1. 创建 `QApplication`，设置 Fusion 风格
+2. 将 `code/` 目录插入 `sys.path`，使 `yolo26_app` 包可被导入
+3. 初始化统一日志体系（`init_logging`）
+4. 创建 `MainWindow` 实例
+5. 安装全局异常钩子（`install_exception_hooks`）
+6. 进入 Qt 事件循环
 
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `_init_ui` | 初始化UI组件和布局 | `() -> None` |
-| `_switch_page` | 切换页面 | `(index: int) -> None` |
-| `_set_project_config` | 设置当前项目配置 | `(config: ProjectConfig) -> None` |
-| `_new_project` | 创建新项目 | `() -> None` |
-| `_open_project` | 打开现有项目 | `() -> None` |
-| `_save_app_state` | 保存应用状态到文件 | `() -> None` |
-| `_restore_app_state` | 从文件恢复应用状态 | `() -> None` |
-
-**信号流程：**
-```
-TestWidget.model_loaded --→ AnnotateWidget.set_yolo_model
-MainWindow.project_config --→ TrainWidget/AnnotateWidget/TestWidget
+```python
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("YOLO26 App")
+    app.setStyle("Fusion")
+    init_logging(Path(__file__).parent)
+    window = MainWindow()
+    install_exception_hooks(window)
+    window.show()
+    return app.exec()
 ```
 
-#### 1.2 AnnotateWidget (annotate_widget.py)
+### 4.2 核心业务层 (core/)
 
-标注模块界面，提供图像标注功能。
+#### 4.2.1 `config.py` — 配置数据类
 
-**关键属性：**
-- `_label_manager: LabelManager` - 类别管理器
-- `_annotations_dict: Dict[str, List[AnnotationItem]]` - 标注数据字典
-- `_current_image_path: str` - 当前图片路径
-- `_image_list: List[str]` - 图片列表
-- `_scene: AnnotationScene` - 标注场景
-- `_view: AnnotationView` - 标注视图
-- `_yolo_annotator: YOLOPreAnnotator` - YOLO预标注器
-- `_sam_annotator: SAMAnnotator` - SAM分割标注器
-- `_video_tracker: VideoTracker` - 视频追踪器
-- `_dino_annotator: GroundingDINOAnnotator` - 文本检测标注器
+定义三个核心数据类，使用 `@dataclass` 实现序列化/反序列化：
 
-**关键方法：**
+| 类 | 职责 | 关键字段 |
+|----|------|----------|
+| `ClassItem` | 标注类别 | `name`, `color`, `kpt_count` |
+| `TrainConfig` | 训练配置 | `task`, `model_family`, `model_size`, `epochs`, `batch`, `imgsz`, `device`, `optimizer`, `lr0`, `patience`, 16 个数据增强参数 |
+| `ProjectConfig` | 项目配置 | `project_name`, `project_path`, `classes: List[ClassItem]`, `train_config: TrainConfig`, `created_at`, `last_opened` |
 
-| 方法 | 描述 | 签名 |
+**原子写入模式**：`ProjectConfig.save()` 使用 `tempfile.mkstemp` + `os.replace` 实现原子写入，异常时自动清理临时文件。
+
+**增强预设归一化**：`normalize_augmentation_preset()` 支持中英文别名映射（如 `"关闭"→"off"`, `"默认"→"default"`）。
+
+#### 4.2.2 `paths.py` — 路径常量
+
+集中管理所有工作区路径，避免散落各模块：
+
+| 常量 | 路径 | 用途 |
 |------|------|------|
-| `_setup_ui` | 初始化标注界面UI | `() -> None` |
-| `_import_images` | 导入单张或多张图片 | `() -> None` |
-| `_import_video` | 导入视频并提取帧 | `() -> None` |
-| `_import_directory` | 导入整个目录的图片 | `() -> None` |
-| `_load_image` | 加载图片到画布 | `(image_path: str) -> None` |
-| `_export_dataset` | 导出YOLO格式数据集 | `() -> None` |
-| `_auto_annotate` | YOLO预标注 | `() -> None` |
-| `_sam_annotate` | SAM交互式分割 | `() -> None` |
-| `_video_track` | 视频帧间追踪 | `() -> None` |
-| `_text_detect` | 文本驱动检测 | `() -> None` |
-| `_batch_detect` | 批量图片检测 | `() -> None` |
-| `set_yolo_model` | 设置YOLO模型用于预标注 | `(model) -> None` |
-| `save_state` | 保存标注状态 | `() -> dict` |
-| `restore_state` | 恢复标注状态 | `(state: dict) -> None` |
+| `WORKSPACE_ROOT` | 项目根目录 | 所有路径的基准 |
+| `SYSTEM_MODEL_DIR` | `system_model/` | 系统模型根目录 |
+| `SYSTEM_MODEL_SUBDIRS` | 子目录字典 | `yolo/`, `sam2/`, `grounding_dino/` |
+| `USER_TRAINED_MODELS_DIR` | `system_model/user_trained/` | 用户训练产出 |
+| `PROJECTS_ROOT` | `my_project/` | 用户项目根目录 |
+| `DEFAULT_PROJECT_DIR` | `my_project/default/` | 默认工作区间 |
+| `APP_DATA_DIR` | `~/.yolo26_app/` | 应用状态目录 |
 
-**工具类型：**
-- `rect` - 矩形标注工具
-- `polygon` - 多边形标注工具
-- `select` - 选择工具
-- `sam` - SAM分割工具
+`ensure_workspace_dirs()` 在首次运行时创建完整目录结构。
 
-#### 1.3 TrainWidget (train_widget.py)
+#### 4.2.3 `project_manager.py` — 项目管理
 
-训练模块界面，配置和启动YOLO模型训练。
+`ProjectManager` 提供项目全生命周期管理的静态方法：
 
-**关键属性：**
-- `_trainer: Optional[YOLOTrainer]` - 训练器实例
-- `_project_path: str` - 项目路径
+| 方法 | 功能 |
+|------|------|
+| `create_project(name, path)` | 创建项目目录结构（datasets/models/runs/images/ + classes.txt + project_config.json） |
+| `open_project(path)` | 加载项目配置，更新 last_opened，记录到最近项目 |
+| `get_recent_projects()` | 读取最近项目列表（最多 20 个） |
+| `add_recent_project(path)` | 添加/更新最近项目 |
+| `get_dataset_dir(config)` | 获取数据集目录 |
+| `get_images_dir(config)` | 获取图片目录 |
+| `get_models_dir(config)` | 获取模型目录 |
+| `get_annotations_path(config)` | 获取标注文件路径 |
 
-**支持的模型配置：**
+#### 4.2.4 `workspace_manager.py` — 工作区间管理
 
-| 模型大小 | 参数量 | 显存需求 | 速度评级 |
-|---------|--------|---------|---------|
-| n (Nano) | 3.2M | ≥2GB | ★★★★★ |
-| s (Small) | 11.2M | ≥4GB | ★★★★ |
-| m (Medium) | 25.9M | ≥8GB | ★★★ |
-| l (Large) | 43.7M | ≥12GB | ★★ |
-| x (XLarge) | 68.4M | ≥16GB | ★ |
+`WorkspaceManager` 管理工作区间的扫描、创建和校验：
 
-**支持的训练任务：**
+- `list_workspaces()` — 扫描 `PROJECTS_ROOT` 下所有含 `project_config.json` 的子文件夹
+- `is_valid_workspace(path)` — 校验路径是否为合法工作区间
+- `create_workspace(name)` — 创建新工作区间（含名称合法性校验：非空、无非法字符 `\ / : * ? " < > |`、不重名）
+- `get_workspace_path(name)` — 返回工作区间完整路径
 
-| 任务类型 | 描述 | 模型后缀 |
-|---------|------|---------|
-| detect | 目标检测 | yolo26{n/s/m/l/x}.pt |
-| segment | 实例分割 | yolo26{n/s/m/l/x}-seg.pt |
-| classify | 图像分类 | yolo26{n/s/m/l/x}-cls.pt |
-| pose | 姿态估计 | yolo26{n/s/m/l/x}-pose.pt |
+#### 4.2.5 `annotation_canvas.py` — 标注画布
 
-**关键方法：**
+这是标注功能的核心模块，基于 PyQt6 的 Graphics View 框架实现：
 
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `_setup_ui` | 初始化训练界面UI | `() -> None` |
-| `_build_config` | 构建训练配置对象 | `() -> TrainConfig` |
-| `_validate_dataset` | 验证数据集配置 | `() -> bool` |
-| `_on_start` | 开始训练 | `() -> None` |
-| `_on_stop` | 停止训练 | `() -> None` |
-| `_on_progress` | 处理训练进度信号 | `(current: int, total: int) -> None` |
-| `_on_log` | 处理日志消息 | `(message: str) -> None` |
-| `_on_finished` | 处理训练完成 | `(message: str) -> None` |
+**数据模型**：
+- `AnnotationItem` (dataclass) — 标注项，包含 `class_index`、`rect`、`polygon`、`item_type`（rect/polygon/keypoint/obb）、`keypoints`、`angle`
 
-#### 1.4 TestWidget (test_widget.py)
+**工具常量**：
+- `TOOL_SELECT`, `TOOL_RECT`, `TOOL_POLYGON`, `TOOL_KEYPOINT`, `TOOL_OBB`, `TOOL_SAM`
 
-测试模块界面，模型推理和验证。
+**核心类**：
 
-**关键属性：**
-- `predictor: YOLOPredictor` - 推理器实例
-- `cap: Optional[cv2.VideoCapture]` - 视频捕获对象
-- `rs_camera: RealSenseCamera` - RealSense相机
-- `_batch_images: List[str]` - 批量图片列表
-- `_show_depth: bool` - 是否显示深度图
+| 类 | 基类 | 职责 |
+|----|------|------|
+| `AnnotationScene` | `QGraphicsScene` | 标注场景：管理标注列表、绘制工具状态、鼠标交互、撤销/重做栈、SAM 交互、顶点编辑、OBB 旋转 |
+| `AnnotationView` | `QGraphicsView` | 标注视图：缩放、平移、鼠标坐标映射 |
+| `_SignalHolder` | `QObject` | 信号持有者，提供 `annotations_changed` 信号 |
 
-**支持的推理输入：**
-- 单张图片
-- 图片目录
-- 视频文件
-- USB摄像头
-- Intel RealSense深度相机
+`AnnotationScene` 支持的标注类型与交互流程：
+- **矩形框**：拖拽绘制 → 释放完成
+- **多边形**：逐点点击 → 双击/Enter 闭合 → 支持顶点拖拽编辑
+- **关键点**：在矩形框内点击放置关键点 → 自动连线 → 双击/Enter 完成
+- **OBB 旋转框**：第一次拖拽确定外接矩形 → 第二次拖拽围绕中心旋转确定角度
+- **SAM 交互**：点击目标区域 → 正/负点提示 → 自动生成分割多边形
 
-**关键方法：**
+#### 4.2.6 `trainer.py` — 训练器
 
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `_init_ui` | 初始化测试界面UI | `() -> None` |
-| `_on_load_model` | 加载YOLO模型 | `() -> None` |
-| `_on_select_image` | 选择单张图片推理 | `() -> None` |
-| `_select_image_directory` | 选择图片目录批量推理 | `() -> None` |
-| `_start_capture` | 启动视频捕获 | `(source: Union[str, int]) -> None` |
-| `_on_timer_timeout` | 定时器回调，处理视频帧 | `() -> None` |
-| `_on_validate` | 验证模型指标 | `() -> None` |
-| `_on_export_clicked` | 显示导出设置 | `() -> None` |
-| `_on_confirm_export` | 确认模型导出 | `() -> None` |
-| `_display_np_image` | 显示推理结果图像 | `(image_np: np.ndarray) -> None` |
+`YOLOTrainer(QThread)` 在后台线程执行 YOLO 训练：
 
-**导出的模型格式：**
-- `onnx` - ONNX格式
-- `torchscript` - TorchScript格式
-- `openvino` - Intel OpenVINO格式
-- `engine` - NVIDIA TensorRT格式
+| 信号 | 用途 |
+|------|------|
+| `progress_signal(int, int)` | 当前 epoch / 总 epoch |
+| `log_signal(str)` | 训练日志文本 |
+| `finished_signal(str)` | 训练完成消息（含最佳模型路径和指标） |
+| `error_signal(str)` | 训练错误消息 |
 
-#### 1.5 Styles (styles.py)
+**关键方法**：
+- `run()` — 加载模型 → 注册回调 → 构建增强参数 → 调用 `model.train()` → 清理 GPU 缓存
+- `stop()` — 设置 `_stop_flag`，通过 `on_train_epoch_end` / `on_train_batch_end` 回调中断训练
+- `_build_augmentation_kwargs()` — 根据 `augmentation_enabled` 构建增强参数字典
+- `_QtLogHandler` — 自定义 logging.Handler，将 Ultralytics 日志转发到 Qt 信号
 
-定义应用的主题样式，支持深色和亮色主题。
+**模型加载逻辑**：优先使用 `pretrained_model` 路径；否则根据 `model_family` + `task` + `model_size` 从 `MODEL_FAMILY_TASK_MODEL_MAP` 拼接权重文件名，在 `system_model/yolo/` 目录下查找。
 
-**主题变量：**
-- `DARK_STYLE` - Catppuccin Mocha 深色主题
-- `LIGHT_STYLE` - Catppuccin Latte 亮色主题
+#### 4.2.7 `predictor.py` — 推理器
 
-**配色方案（深色主题）：**
-- 背景色: `#1e1e2e`
-- 表面色: `#313244`
-- 边框色: `#45475a`
-- 主色调: `#89b4fa` (蓝色)
-- 文字色: `#cdd6f4`
+`YOLOPredictor` 封装模型的加载、推理、验证和导出：
+
+| 方法 | 功能 |
+|------|------|
+| `load_model(path, task)` | 加载模型，ONNX 模型自动验证并支持 CPU 回退 |
+| `predict_image(image_path, conf, iou, imgsz, device, max_det)` | 图片推理，返回（标注图像, results） |
+| `predict_frame(frame_np, conf, iou, imgsz, device, max_det)` | 视频帧推理 |
+| `validate_model(data)` | 模型验证，根据任务类型返回 mAP/top1 等指标 |
+| `export_model(format, output_dir, **kwargs)` | 多格式导出，含备份/恢复/验证机制 |
+| `get_model_info()` | 获取模型任务类型和类别名 |
+| `get_onnx_diag()` | ONNX 诊断信息 |
+
+**TensorRT 兼容性**：`_apply_tensorrt_enum_compat()` 为 TensorRT 10.x 补齐旧式 `BuilderFlag` 枚举别名（`FP16→kFP16` 等），解决与旧版 Ultralytics 的兼容问题。
+
+**ONNX GPU/CPU 回退**：`_verify_onnx_model()` 用 dummy 推理测试 ONNX 模型；失败时 `_reload_onnx_cpu()` 隐藏 GPU 设备并重新加载为 CPU 推理。
+
+**导出安全机制**：导出前备份现有文件 → 导出 → 验证（仅 onnx/engine）→ 失败时恢复备份 → 成功后清理备份。
+
+#### 4.2.8 `auto_annotator.py` — AI 辅助标注
+
+提供三种 AI 辅助标注器：
+
+| 类 | 功能 | 依赖 |
+|----|------|------|
+| `YOLOPreAnnotator` | 使用已加载 YOLO 模型自动预标注（rect/polygon） | ultralytics |
+| `SAMAnnotator` | SAM2 交互式分割，支持 8 种模型配置自动匹配 | sam2 (可选) |
+| `GroundingDINOAnnotator` | 文本驱动零样本检测 | groundingdino-pip (可选) |
+
+`SAMAnnotator` 内置模型配置映射 `_SAM2_CONFIG_MAP` 和下载 URL 列表 `SAM2_MODEL_URLS`，`scan_model_file()` 自动扫描目录下的模型文件并匹配配置。
+
+#### 4.2.9 `yolo_exporter.py` — 数据集导出
+
+`YOLOExporter` 将标注数据导出为 YOLO 格式数据集：
+
+**导出流程**：
+1. `_validate_annotations()` — 预校验（类别数量、索引范围、关键点数量、标注有效性）
+2. 创建临时目录（同级隐藏目录）
+3. 随机划分训练/验证集（默认 80%）
+4. 按任务类型写入标签文件
+5. 生成 `data.yaml`（含 path/train/val/nc/names，pose 任务含 kpt_shape）
+6. 原子重命名临时目录为目标目录
+7. 异常时清理临时目录
+
+**任务特定处理**：
+- `detect`：矩形框归一化坐标；多边形转外接矩形
+- `segment`：多边形顶点归一化坐标（Douglas-Peucker 简化）
+- `pose`：矩形框 + 关键点坐标（x, y, visibility=2）
+- `obb`：旋转框归一化坐标 + 角度（弧度转度）
+- `classify`：目录结构导出（train/val 下按类别名分子目录），不生成 labels
+
+#### 4.2.10 `model_registry.py` — 模型注册表
+
+集中维护训练相关常量，避免多处重复定义：
+
+| 常量 | 用途 |
+|------|------|
+| `MODEL_FAMILY_TASK_MODEL_MAP` | 各模型系列（yolo26/yolov8）在不同任务下的权重文件命名模板 |
+| `AUGMENTATION_PRESET_LABELS` | 增强预设中文标签映射 |
+| `AUGMENTATION_PRESET_ORDER` | 预设展示顺序 |
+| `AUGMENTATION_PRESETS` | 4 种预设（off/light/default/strong）的具体参数值 |
+
+#### 4.2.11 `persistence.py` — 原子持久化
+
+`write_json_atomic(path, data)` 使用 `QSaveFile` 实现 JSON 原子写入：写入失败时 `cancelWriting()` 不产生部分文件，只有 `commit()` 成功后文件才可见。
+
+#### 4.2.12 `gpu_detector.py` — GPU 检测
+
+通过子进程检测 CUDA 可用性，避免主进程因 CUDA 初始化卡死：
+
+- `detect_gpu_subprocess(timeout)` — 在独立进程中检测 `torch.cuda.is_available()`，含超时终止和重试
+- `load_gpu_cache()` / `save_gpu_cache()` — 缓存检测结果（TTL 30 分钟，超时状态 TTL 1 分钟）
+- `GPUDetectWorker(QThread)` — 异步检测，优先读缓存，信号返回结果
+- `load_exit_flag()` / `save_exit_flag()` — 记录上次退出是否正常
+
+#### 4.2.13 `logger.py` — 统一日志
+
+- `init_logging(workspace_root)` — 初始化根 logger，文件 handler 按日期切割（保留 7 天），控制台 handler 输出 WARNING+ 
+- `get_logger(name)` — 获取配置好的 logger 实例
+- `get_workspace_root()` — 返回初始化时的工作区根路径
+
+#### 4.2.14 `exception_handler.py` — 全局异常处理
+
+`install_exception_hooks(main_window)` 安装双层异常钩子：
+
+1. **Python 层**：`sys.excepthook` → `_crash_excepthook`
+   - 强制保存当前标注（`flush_autosave`）
+   - 写入崩溃日志（`crash_YYYYMMDD_HHMMSS.log`，含时间戳、系统信息、traceback）
+   - 弹出友好提示对话框
+   - 安全退出
+
+2. **Qt 层**：重写 `QApplication.notify` 兜底捕获 Qt 事件循环中的异常
+
+#### 4.2.15 其他核心模块
+
+| 模块 | 类/函数 | 职责 |
+|------|---------|------|
+| `label_manager.py` | `LabelManager` | 类别标签 CRUD，20 色调色板自动分配 |
+| `task_manager.py` | `TaskManager`, `_TaskWorker` | 通用异步任务管理，支持超时取消和回调 |
+| `realsense_camera.py` | `RealSenseCamera`, `DeviceInfo` | Intel RealSense 深度相机封装（设备枚举、流启动、帧获取、深度着色） |
+| `utils/common.py` | `imread_unicode`, `imwrite_unicode` | 中文路径图像读写（`np.fromfile` + `cv2.imdecode` / `cv2.imencode` + `np.tofile`） |
+
+### 4.3 UI 表现层 (ui/)
+
+#### 4.3.1 `main_window.py` — 主窗口
+
+`MainWindow(QMainWindow)` 是应用的顶层窗口，职责包括：
+
+- **布局结构**：顶部工作区间工具栏 + 左侧导航栏（64px 宽，图标按钮）+ 右侧 `QStackedWidget` 页面区
+- **页面管理**：三个页面（标注/训练/测试），懒加载模式（首次切换时创建 Widget）
+- **工作区间管理**：ComboBox 选择工作区间，含 "自由空间" 选项清空配置；切换失败时回滚到上一个选择
+- **状态持久化**：窗口几何（`normalGeometry` + 屏幕边界检查）、训练页面滚动位置等保存到 `~/.yolo26_app/app_state.json`
+- **环境自检**：延迟 2 秒检查常见环境问题（onnxruntime 冲突、PyTorch CUDA 不匹配等）
+- **资源清理**：`closeEvent` 中停止所有后台线程（`_gpu_detect_worker` 等）
+
+**辅助类**：`NewProjectDialog` — 新建项目对话框，自动生成不冲突的默认名（project1, project2...）
+
+#### 4.3.2 `annotation.py` — 标注页面
+
+`AnnotateWidget(QWidget)` 是数据标注的主界面：
+
+- **媒体导入**：单张图片、视频文件（自动提取帧）、整个目录批量导入（>50 项显示进度对话框）
+- **工具栏**：选择、矩形、多边形、关键点、OBB、SAM 分割、Grounding DINO、批量检测、清除、删除、导出
+- **类别管理**：添加/删除/重命名类别，颜色自动分配
+- **标注交互**：委托给 `AnnotationScene` 处理所有画布交互
+- **自动保存**：1500ms 防抖，切换图片/关闭窗口时强制保存（`flush_autosave`）
+- **批量检测**：YOLO + SAM2 自动标注流水线，后台线程逐帧处理，支持取消
+- **数据集导出**：调用 `YOLOExporter` 导出，支持任务类型选择和训练比例配置
+
+#### 4.3.3 `training.py` — 训练页面
+
+`TrainWidget(QWidget)` 是模型训练的配置与监控界面：
+
+- **配置区**（可滚动）：任务类型、模型系列、模型大小、预训练模型、epochs、batch、imgsz、device、optimizer、lr0、patience、workers、cache、seed、close_mosaic
+- **数据增强区**：启用开关 + 预设选择（off/light/default/strong/custom）+ 16 个增强参数滑块
+- **训练控制**：开始/停止训练按钮
+- **进度显示**：epoch 进度条 + 实时日志文本框
+- **训练曲线**：pyqtgraph 绘制 loss 曲线（box_loss, cls_loss, dfl_loss 等），自动刷新
+- **状态恢复**：`save_state()` / `restore_state()` 保存/恢复滚动位置，打开页面时平滑滚动到上次位置
+
+#### 4.3.4 `inference.py` — 推理页面
+
+`TestWidget(QWidget)` 是模型推理与测试界面：
+
+- **模型加载**：选择 .pt/.onnx/.engine 模型文件，显示模型信息和 ONNX 诊断
+- **推理源**：单张图片、视频文件、摄像头、Intel RealSense 深度相机
+- **推理参数**：置信度阈值、IoU 阈值、图像尺寸、设备
+- **结果显示**：标注图像显示区域 + 检测结果统计
+- **模型验证**：选择 data.yaml 验证模型，显示 mAP/top1 等指标
+- **模型导出**：打开 `ExportDialog` 选择格式和参数
+
+#### 4.3.5 `export_dialog.py` — 导出对话框
+
+`ExportDialog(QDialog)` 提供模型导出的完整参数配置：
+
+- **任务预设**：8 种预设（自定义、TensorRT FP16/INT8、检测/分割/关键点/OBB/分类），自动匹配当前模型任务
+- **导出格式**：10 种格式（ONNX/TorchScript/OpenVINO/TensorRT/CoreML/TFLite/NCNN/PaddlePaddle/MNN/RKNN）
+- **参数控件**：根据格式动态显示/隐藏适用参数（imgsz/half/int8/dynamic/batch/opset/workspace/simplify/nms/device/data/fraction）
+- **INT8 校准**：必须提供 data.yaml 校准数据集，含文件存在性和格式校验
+- **任务-预设不匹配警告**：选择与模型任务不符的预设时显示提示
+
+**关键常量**：
+- `FORMAT_PARAMS` — 各格式支持的参数集合
+- `EXPORT_PRESETS` — 预设的具体参数值
+- `TASK_PRESET_MAP` — 任务类型到预设名的映射
+
+#### 4.3.6 `styles.py` — 样式系统
+
+基于设计令牌（Design Token）的 QSS 样式表生成系统：
+
+- `DARK_TOKENS` / `LIGHT_TOKENS` — 颜色、字体、间距、圆角等设计令牌字典
+- `DARK_STYLE` / `LIGHT_STYLE` — 预生成的 QSS 样式表字符串
+- `get_style(theme)` — 根据主题名返回对应 QSS
+
+采用 Catppuccin 配色方案，暗色主题为 Mocha 变体，亮色主题为 Latte 变体。
 
 ---
 
-### 2. Core 模块 (yolo26_app/core/)
+## 5. 关键类与函数说明
 
-#### 2.1 Config (config.py)
+### 5.1 核心数据类
 
-数据模型定义模块，包含所有核心数据类。
-
-##### ClassItem
-
-标注类别数据类。
+#### `ClassItem`
 
 ```python
 @dataclass
 class ClassItem:
     name: str = ""           # 类别名称
-    color: str = "#FF0000"   # 十六进制颜色值
+    color: str = "#FF0000"   # 显示颜色（十六进制）
+    kpt_count: int = 0       # 关键点数量（pose 任务）
 ```
 
-**方法：**
-- `to_dict() -> dict` - 序列化为字典
-- `from_dict(data: dict) -> ClassItem` - 从字典反序列化
-
-##### TrainConfig
-
-训练配置数据类。
+#### `TrainConfig`
 
 ```python
 @dataclass
 class TrainConfig:
-    task: str = "detect"           # 任务类型
-    model_size: str = "n"          # 模型大小
-    data: str = ""                 # 数据集配置文件路径
-    epochs: int = 100              # 训练轮数
-    batch: int = 16                # 批大小
-    imgsz: int = 640               # 输入图像尺寸
-    device: str = ""               # 设备 (auto/cpu/0/0,1)
-    optimizer: str = "auto"        # 优化器
-    lr0: float = 0.01              # 初始学习率
-    patience: int = 100            # 早停耐心值
-    project: str = ""               # 项目目录
-    name: str = ""                 # 实验名称
+    task: str = "detect"              # 任务类型: detect/segment/classify/pose
+    model_family: str = "yolo26"      # 模型系列: yolo26/yolov8
+    model_size: str = "n"             # 模型大小: n/s/m/l/x
+    pretrained_model: str = ""        # 自定义预训练模型路径
+    epochs: int = 100                 # 训练轮数
+    batch: int = 16                   # 批大小
+    imgsz: int = 640                  # 图像尺寸
+    device: str = ""                  # 设备: auto/cpu/0/0,1
+    optimizer: str = "auto"           # 优化器: auto/SGD/Adam/AdamW
+    lr0: float = 0.01                 # 初始学习率
+    patience: int = 100               # 早停耐心值
+    workers: int = 8                  # 数据加载线程数
+    cache: bool = False               # 缓存数据
+    seed: int = 0                     # 随机种子
+    plots: bool = True                # 生成训练图表
+    close_mosaic: int = 10            # 最后 N 轮关闭 mosaic
+    augmentation_enabled: bool = True # 是否启用数据增强
+    augmentation_preset: str = "default"  # 增强预设
+    # ... 16 个数据增强参数 (hsv_h/s/v, degrees, translate, scale, shear,
+    #     perspective, flipud, fliplr, mosaic, mixup, cutmix, copy_paste,
+    #     erasing, auto_augment)
 ```
 
-**方法：**
-- `to_dict() -> dict` - 序列化为字典
-- `from_dict(data: dict) -> TrainConfig` - 从字典反序列化
-
-##### ProjectConfig
-
-项目配置数据类，包含项目的完整配置信息。
+#### `ProjectConfig`
 
 ```python
 @dataclass
 class ProjectConfig:
-    project_name: str = ""                    # 项目名称
-    project_path: str = ""                    # 项目路径
-    classes: List[ClassItem] = field(...)     # 类别列表
-    train_config: TrainConfig = field(...)      # 训练配置
-    created_at: str = ""                       # 创建时间 (ISO格式)
-    last_opened: str = ""                     # 最后打开时间
+    project_name: str = ""
+    project_path: str = ""
+    classes: List[ClassItem] = field(default_factory=list)
+    train_config: TrainConfig = field(default_factory=TrainConfig)
+    created_at: str = ""
+    last_opened: str = ""
+
+    def save(self, path) -> None     # 原子写入（临时文件 + os.replace）
+    @classmethod
+    def load(cls, path) -> ProjectConfig  # 从 JSON 加载
 ```
 
-**方法：**
-- `to_dict() -> dict` - 序列化为字典
-- `from_dict(data: dict) -> ProjectConfig` - 从字典反序列化
-- `save(path: Union[str, Path]) -> None` - 保存到文件
-- `load(path: Union[str, Path]) -> ProjectConfig` - 从文件加载
+### 5.2 标注相关类
 
-#### 2.2 ProjectManager (project_manager.py)
-
-项目管理器，处理项目的创建、打开和配置管理。
-
-**主要功能：**
-- 创建新项目并初始化目录结构
-- 打开现有项目
-- 管理最近项目列表
-- 提供数据集和模型目录路径
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `create_project` | 创建新项目 | `(name: str, path: str) -> ProjectConfig` |
-| `open_project` | 打开现有项目 | `(path: str) -> ProjectConfig` |
-| `get_recent_projects` | 获取最近项目列表 | `() -> List[str]` |
-| `add_recent_project` | 添加到最近项目 | `(path: str) -> None` |
-| `get_dataset_dir` | 获取数据集目录 | `(config: ProjectConfig) -> Path` |
-| `get_models_dir` | 获取模型目录 | `(config: ProjectConfig) -> Path` |
-
-**项目目录结构：**
-```
-project_path/
-├── project_config.json      # 项目配置文件
-├── classes.txt             # 类别列表
-├── datasets/               # 数据集目录
-├── models/                 # 模型目录
-└── runs/                   # 训练运行记录
-```
-
-#### 2.3 LabelManager (label_manager.py)
-
-标注类别管理器，处理类别的增删改查。
-
-**颜色调色板：**
-预定义20种颜色用于类别自动分配。
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `load_from_project` | 从项目配置加载类别 | `(config: ProjectConfig) -> None` |
-| `save_to_project` | 保存类别到项目配置 | `(config: ProjectConfig) -> None` |
-| `add_class` | 添加类别 | `(name: str) -> ClassItem` |
-| `remove_class` | 移除类别 | `(index: int) -> None` |
-| `update_class` | 更新类别名称 | `(index: int, name: str) -> None` |
-| `get_class_by_index` | 按索引获取类别 | `(index: int) -> Optional[ClassItem]` |
-| `get_class_index` | 按名称获取索引 | `(name: str) -> int` |
-| `get_all_classes` | 获取所有类别 | `() -> List[ClassItem]` |
-
-#### 2.4 AnnotationCanvas (annotation_canvas.py)
-
-标注画布模块，提供图像标注的交互功能。
-
-##### AnnotationItem
-
-标注项数据类。
+#### `AnnotationItem`
 
 ```python
 @dataclass
 class AnnotationItem:
-    class_index: int              # 类别索引
-    rect: QRectF = field(...)    # 矩形区域
-    polygon: QPolygonF = field(...)  # 多边形点集
-    item_type: str = "rect"      # 类型: "rect" 或 "polygon"
+    class_index: int                              # 类别索引
+    rect: QRectF = field(default_factory=QRectF)  # 矩形区域
+    polygon: QPolygonF = field(default_factory=QPolygonF)  # 多边形顶点
+    item_type: str = "rect"                       # 类型: rect/polygon/keypoint/obb
+    keypoints: List[QPointF] = field(default_factory=list)  # 关键点列表
+    angle: float = 0.0                            # OBB 旋转角度（弧度）
 ```
 
-##### AnnotationScene
-
-标注场景类，继承自 QGraphicsScene，处理标注交互逻辑。
-
-**主要功能：**
-- 矩形标注绘制
-- 多边形标注绘制
-- SAM 交互式分割
-- 标注选择和删除
-- 缩放和拖拽
-
-**关键属性：**
-- `_current_tool: str` - 当前工具
-- `_current_class_index: int` - 当前类别索引
-- `_annotations: list[AnnotationItem]` - 标注列表
-- `_drawing: bool` - 是否正在绘制
-- `_selected_index: int` - 选中标注索引
-- `_class_colors: list[str]` - 类别颜色列表
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `set_tool` | 设置工具 | `(tool: str) -> None` |
-| `set_current_class` | 设置当前类别 | `(index: int) -> None` |
-| `set_class_colors` | 设置类别颜色 | `(colors: list[str]) -> None` |
-| `mousePressEvent` | 鼠标按下事件 | `(event) -> None` |
-| `mouseMoveEvent` | 鼠标移动事件 | `(event) -> None` |
-| `mouseReleaseEvent` | 鼠标释放事件 | `(event) -> None` |
-| `mouseDoubleClickEvent` | 双击事件(完成多边形) | `(event) -> None` |
-| `run_sam_prediction` | 运行SAM预测 | `() -> None` |
-| `apply_sam_result` | 应用SAM结果 | `(masks, scores) -> None` |
-| `delete_selected` | 删除选中标注 | `() -> None` |
-| `clear_annotations` | 清除所有标注 | `() -> None` |
-| `get_annotations` | 获取标注列表 | `() -> list[AnnotationItem]` |
-| `load_annotations` | 加载标注列表 | `(annotations: list) -> None` |
-
-**信号：**
-- `annotations_changed: pyqtSignal` - 标注变化信号
-
-##### AnnotationView
-
-标注视图类，继承自 QGraphicsView，提供画布的显示和交互。
-
-**关键属性：**
-- `_scale_factor: float` - 缩放因子
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `fit_to_item` | 适应项目尺寸 | `() -> None` |
-| `wheelEvent` | 鼠标滚轮缩放 | `(event) -> None` |
-| `mousePressEvent` | 中键拖拽 | `(event) -> None` |
-
-#### 2.5 Trainer (trainer.py)
-
-YOLO模型训练器，在后台线程中运行训练。
-
-##### YOLOTrainer
-
-训练器类，继承自 QThread。
-
-**信号：**
-- `progress_signal: pyqtSignal(int, int)` - 进度信号 (当前, 总数)
-- `log_signal: pyqtSignal(str)` - 日志消息信号
-- `finished_signal: pyqtSignal(str)` - 训练完成信号
-- `error_signal: pyqtSignal(str)` - 错误信号
-
-**任务模型映射：**
-```python
-TASK_MODEL_MAP = {
-    "detect": "yolo26{size}.pt",
-    "segment": "yolo26{size}-seg.pt",
-    "classify": "yolo26{size}-cls.pt",
-    "pose": "yolo26{size}-pose.pt",
-}
-```
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `run` | 训练主循环 | `() -> None` |
-| `stop` | 停止训练 | `() -> None` |
-
-##### _QtLogHandler
-
-日志处理器，将日志消息转发到Qt信号。
+#### `AnnotationScene`
 
 ```python
-class _QtLogHandler(logging.Handler):
-    def emit(self, record: logging.LogRecord) -> None
-```
+class AnnotationScene(QGraphicsScene):
+    # 信号
+    annotations_changed = pyqtSignal()
 
-#### 2.6 Predictor (predictor.py)
-
-YOLO模型推理器，处理模型加载和推理。
-
-##### YOLOPredictor
-
-推理器类，封装YOLO模型的加载和推理功能。
-
-**关键属性：**
-- `model: Optional[YOLO]` - YOLO模型实例
-- `model_path: str` - 模型文件路径
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `load_model` | 加载模型 | `(path: str) -> bool` |
-| `predict_image` | 预测单张图片 | `(image_path: str, conf: float) -> Tuple[np.ndarray, object]` |
-| `predict_frame` | 预测视频帧 | `(frame_np: np.ndarray, conf: float) -> Tuple[np.ndarray, object]` |
-| `validate_model` | 验证模型指标 | `(data: str) -> dict` |
-| `export_model` | 导出模型 | `(format: str, output_dir: str) -> str` |
-| `get_model_info` | 获取模型信息 | `() -> dict` |
-| `_draw_results` | 绘制推理结果 | `(image_np: np.ndarray, results: object) -> np.ndarray` |
-
-**返回格式：**
-- 成功：`(annotated_image, results_object)`
-- 失败：`(np.array([]), None)`
-
-#### 2.7 YOLOExporter (yolo_exporter.py)
-
-YOLO数据集导出器，将标注数据导出为YOLO格式。
-
-##### YOLOExporter
-
-导出器类，静态方法实现导出逻辑。
-
-**关键方法：**
-
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `export_dataset` | 导出数据集 | `(annotations_dict, classes, output_dir, train_ratio) -> Tuple[str, Dict]` |
-
-**导出目录结构：**
-```
-output_dir/
-├── images/
-│   ├── train/           # 训练集图片
-│   └── val/             # 验证集图片
-├── labels/
-│   ├── train/           # 训练集标签
-│   └── val/             # 验证集标签
-└── data.yaml            # 数据集配置文件
-```
-
-**YOLO标签格式：**
-
-矩形框：
-```
-<class_index> <center_x> <center_y> <width> <height>
-```
-所有值都是相对于图像尺寸的归一化值 (0-1)。
-
-多边形：
-```
-<class_index> <x1> <y1> <x2> <y2> ... <xn> <yn>
-```
-
-#### 2.8 AutoAnnotator (auto_annotator.py)
-
-自动标注工具集，支持多种预标注方式。
-
-##### YOLOPreAnnotator
-
-使用YOLO模型进行预标注。
-
-```python
-class YOLOPreAnnotator:
-    def __init__(self) -> None
-    def set_model(self, model) -> None
-    def annotate(self, image_path: str, conf: float = 0.25, 
-                 class_mapping: Optional[Dict[int, int]] = None) -> List[AnnotationItem]
-```
-
-**功能：**
-- 处理检测框
-- 处理分割掩码
-- 支持类别映射
-
-##### SAMAnnotator
-
-使用SAM (Segment Anything Model) 进行交互式分割标注。
-
-```python
-class SAMAnnotator:
-    def __init__(self) -> None
+    # 核心属性
     @property
-    def available(self) -> bool
-    @staticmethod
-    def scan_model_file(directory: str) -> Optional[Tuple[str, str]]
-    def load_model(self, model_path: str, model_type: str = "vit_b", 
-                   device: str = "cuda") -> bool
-    def set_image(self, image: np.ndarray) -> None
-    def predict(self, point_coords: np.ndarray, point_labels: np.ndarray) -> List[AnnotationItem]
-```
-
-**支持的SAM模型类型：**
-- `vit_h` - ViT-Huge
-- `vit_l` - ViT-Large
-- `vit_b` - ViT-Base (默认)
-- `vit_t` - MobileSAM
-
-##### VideoTracker
-
-使用OpenCV追踪器进行视频帧间标注传播。
-
-```python
-class VideoTracker:
-    @staticmethod
-    def get_tracker_name() -> str
-    def track_frames(self, image_paths: List[str], 
-                    initial_annotations: List[AnnotationItem],
-                    max_frames: int = 0) -> Dict[int, List[AnnotationItem]]
-```
-
-**追踪器优先级：** CSRT > KCF > MIL
-
-##### GroundingDINOAnnotator
-
-使用Grounding DINO进行文本驱动的零样本检测。
-
-```python
-class GroundingDINOAnnotator:
-    def __init__(self) -> None
+    def current_tool(self) -> str          # 当前工具
     @property
-    def available(self) -> bool
-    def load_model(self, config_path: str, weights_path: str) -> bool
-    def detect(self, image_path: str, text_prompt: str,
-               box_threshold: float = 0.35,
-               text_threshold: float = 0.25,
-               class_mapping: Optional[Dict[str, int]] = None) -> List[AnnotationItem]
+    def current_class_index(self) -> int   # 当前类别索引
+    @property
+    def annotations(self) -> list[AnnotationItem]  # 标注列表副本
+
+    # 配置方法
+    def set_tool(self, tool: str) -> None
+    def set_class_colors(self, colors: list[str]) -> None
+    def set_class_names(self, names: list[str]) -> None
+    def set_sam_annotator(self, annotator) -> None
+
+    # 标注操作
+    def set_annotations(self, annotations: list[AnnotationItem]) -> None
+    def add_annotation(self, item: AnnotationItem) -> None
+    def delete_selected(self) -> None
+    def clear_annotations(self) -> None
+
+    # 撤销/重做
+    def undo(self) -> None
+    def redo(self) -> None
 ```
 
-#### 2.9 RealSenseCamera (realsense_camera.py)
+### 5.3 训练器
 
-Intel RealSense深度相机支持模块。
-
-##### DeviceInfo
-
-设备信息数据类。
+#### `YOLOTrainer`
 
 ```python
-@dataclass
-class DeviceInfo:
-    name: str           # 设备名称
-    serial: str         # 序列号
-    usb_type: str       # USB类型
-    product_line: str    # 产品线
+class YOLOTrainer(QThread):
+    progress_signal = pyqtSignal(int, int)  # (current_epoch, total_epochs)
+    log_signal = pyqtSignal(str)            # 日志文本
+    finished_signal = pyqtSignal(str)       # 完成消息
+    error_signal = pyqtSignal(str)          # 错误消息
+
+    def __init__(self, config: TrainConfig, project_path: str)
+    def run(self) -> None     # 训练主逻辑
+    def stop(self) -> None    # 设置停止标志
 ```
 
-##### RealSenseCamera
+### 5.4 推理器
 
-RealSense相机控制类。
+#### `YOLOPredictor`
 
-**关键方法：**
+```python
+class YOLOPredictor:
+    def load_model(self, path: str, task: str = "") -> bool
+    def predict_image(self, image_path, conf, iou, imgsz, device, max_det) -> Tuple[np.ndarray, object]
+    def predict_frame(self, frame_np, conf, iou, imgsz, device, max_det) -> Tuple[np.ndarray, object]
+    def validate_model(self, data: str) -> dict
+    def export_model(self, format: str, output_dir: str, **kwargs) -> Tuple[str, bool, str]
+    def get_model_info(self) -> dict
+    def get_onnx_diag(self) -> str
 
-| 方法 | 描述 | 签名 |
-|------|------|------|
-| `is_available` (静态) | 检查pyrealsense2是否可用 | `() -> bool` |
-| `list_devices` (静态) | 列出可用设备 | `() -> List[DeviceInfo]` |
-| `start` | 启动相机流 | `(device_serial, width, height, fps) -> bool` |
-| `get_frames` | 获取彩色和深度帧 | `() -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]` |
-| `colorize_depth` | 深度图着色 | `(depth_np: np.ndarray) -> Optional[np.ndarray]` |
-| `stop` | 停止相机流 | `() -> None` |
-| `running` (属性) | 是否正在运行 | `-> bool` |
+    @property
+    def is_onnx(self) -> bool
+```
+
+### 5.5 工具函数
+
+#### `write_json_atomic`
+
+```python
+def write_json_atomic(path: Union[str, Path], data: Any) -> None
+    # 使用 QSaveFile 原子写入 JSON，读者永远不会看到部分文件
+```
+
+#### `imread_unicode` / `imwrite_unicode`
+
+```python
+def imread_unicode(path: str) -> np.ndarray
+    # np.fromfile + cv2.imdecode，绕过 OpenCV 中文路径限制
+
+def imwrite_unicode(path: str, img: np.ndarray) -> bool
+    # cv2.imencode + np.tofile，绕过 OpenCV 中文路径限制
+```
+
+#### `detect_gpu_subprocess`
+
+```python
+def detect_gpu_subprocess(timeout: float = 10.0) -> Tuple[str, str]
+    # 在独立进程中检测 CUDA，返回 (status, device_name)
+    # status: "gpu" / "cpu" / "timeout" / "error"
+```
 
 ---
 
-## 依赖关系
+## 6. 依赖关系
 
-### 核心依赖
+### 6.1 核心依赖（必装）
 
-| 依赖包 | 版本要求 | 用途 |
-|--------|---------|------|
-| ultralytics | >=8.0 | YOLO模型框架 |
-| PyQt6 | >=6.0 | GUI框架 |
-| opencv-python | >=4.6.0 | 图像处理 |
-| numpy | >=1.20.0 | 数值计算 |
-| pyyaml | >=5.3.1 | YAML配置解析 |
+| 依赖 | 最低版本 | 用途 |
+|------|----------|------|
+| `ultralytics` | >=8.0 | YOLO 模型训练/推理/导出引擎 |
+| `PyQt6` | >=6.0 | GUI 框架 |
+| `opencv-python` | >=4.6.0 | 图像处理 |
+| `numpy` | >=1.20.0 | 数值计算 |
+| `pyyaml` | >=5.3.1 | YAML 配置文件读写 |
+| `pyqtgraph` | >=0.13.0 | 训练曲线可视化 |
 
-### 可选依赖
+此外，`PyTorch`（torch + torchvision）是 Ultralytics 的底层依赖，由安装脚本根据 CUDA 版本自动选择对应索引安装。
 
-| 依赖包 | 版本要求 | 用途 |
-|--------|---------|------|
-| pyrealsense2 | >=2.50.0 | RealSense深度相机 |
-| torch | - | PyTorch深度学习框架 (GPU支持) |
+### 6.2 可选依赖
 
-### 间接依赖（通过ultralytics）
+| 可选组 | 包 | 用途 | 安装命令 |
+|--------|----|------|----------|
+| `sam` | `sam2` | SAM2 交互式分割标注 | `pip install -e ".[sam]"` |
+| `dino` | `groundingdino-pip` | Grounding DINO 零样本检测 | `pip install -e ".[dino]"` |
+| `realsense` | `pyrealsense2>=2.50.0` | Intel RealSense 深度相机 | `pip install -e ".[realsense]"` |
+| `tensorrt` | `tensorrt>=8.6` | TensorRT 极速 GPU 推理 | `pip install -e ".[tensorrt]"` |
+| `all` | 以上全部 | 全部可选依赖 | `pip install -e ".[all]"` |
 
-| 依赖包 | 用途 |
-|--------|------|
-| torch | 深度学习框架 |
-| torchvision | 计算机视觉工具 |
-| pillow | 图像处理 |
-| matplotlib | 可视化 |
-| seaborn | 统计图形 |
-| scipy | 科学计算 |
+### 6.3 依赖配置文件
+
+| 文件 | 用途 |
+|------|------|
+| `pyproject.toml` | 项目元数据 + 核心依赖 + 可选依赖组 + 构建系统配置 |
+| `requirements.txt` | pip 直接安装的核心依赖 + 可选依赖安装说明 |
+| `requirements-lock.txt` | 锁定版依赖（PyTorch 2.3.1 + CUDA 12.1 + Ultralytics 8.3.20 + TensorRT 10.2.0） |
+
+### 6.4 版本兼容性说明
+
+- **TensorRT 10.x**：`BuilderFlag` 枚举值改名（`FP16`→`kFP16`），需 Ultralytics ≥ 8.3.0。`predictor.py` 内置兼容补丁。
+- **ONNX Runtime**：`onnxruntime` 与 `onnxruntime-gpu` 不可同时安装。GPU 推理异常时自动回退 CPU。
+- **Python**：支持 3.9 - 3.12。
 
 ---
 
-## 项目运行方式
+## 7. 项目运行方式
 
-### 环境准备
+### 7.1 环境准备
 
-#### 1. 克隆仓库
+**前置要求**：
+- Python 3.9+
+- （可选）NVIDIA GPU + CUDA 驱动
 
+### 7.2 一键安装
+
+**Windows**：
+```bat
+install.bat
+```
+脚本自动完成：创建虚拟环境 → 检测 CUDA 版本 → 选择 PyTorch 索引 → 安装 PyTorch → 安装核心依赖 → 询问可选依赖 → 环境自检 → 排障提示
+
+**Linux/macOS**：
 ```bash
-git clone https://github.com/<your-username>/yolo26-app.git
-cd yolo26-app
+chmod +x install.sh
+./install.sh
 ```
 
-#### 2. 创建虚拟环境（推荐）
+### 7.3 手动安装
 
 ```bash
+# 1. 创建虚拟环境
 python -m venv venv
+source venv/bin/activate        # Linux/macOS
+venv\Scripts\activate.bat       # Windows
 
-# Windows
-venv\Scripts\activate
+# 2. 安装 PyTorch（根据 CUDA 版本选择索引）
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124  # CUDA 12.4
+# 或 CPU 版本:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-# Linux/macOS
-source venv/bin/activate
+# 3. 安装项目核心依赖
+pip install -e .
+# 或: pip install -r requirements.txt
+
+# 4. （可选）安装可选依赖
+pip install -e ".[sam,dino,realsense,tensorrt]"
 ```
 
-#### 3. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-#### 4. 安装PyTorch（GPU支持）
-
-访问 [PyTorch官网](https://pytorch.org/get-started/locally/) 安装对应CUDA版本的PyTorch。
-
-```bash
-# CUDA 11.8
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# CUDA 12.1
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-#### 5. 安装可选依赖
-
-```bash
-# RealSense深度相机支持
-pip install pyrealsense2
-```
-
-### 启动应用
-
-#### 方式一：模块方式运行（推荐）
-
-```bash
-python -m yolo26_app.main
-```
-
-#### 方式二：直接运行入口文件
+### 7.4 启动应用
 
 ```bash
 python main.py
 ```
 
-#### 方式三：安装后运行
-
-```bash
-pip install -e .
-yolo26-app
-```
-
-### 完整工作流程
+### 7.5 典型使用流程
 
 ```
-1. 新建项目
-   文件 → 新建项目 → 输入名称和路径
-
-2. 导入数据
-   标注页面 → 导入图片/视频/目录
-
-3. 定义类别
-   左侧类别面板 → 点击 "+" 添加类别
-
-4. 绘制标注
-   选择工具（矩形/多边形）→ 在画布上标注
-
-5. 导出数据集
-   点击"导出数据集" → 选择输出目录
-
-6. 训练模型
-   切换到训练页面 → 选择data.yaml → 配置参数 → 开始训练
-
-7. 测试推理
-   切换到测试页面 → 加载best.pt模型 → 选择推理源
-```
-
-### GPU配置
-
-应用会自动检测CUDA可用性，状态栏显示：
-- 🟢 GPU: [设备名称] - 表示GPU可用
-- 🔴 CPU - 表示仅使用CPU
-
-手动指定设备：
-- `cpu` - 强制使用CPU
-- `0` - 使用第一块GPU
-- `0,1` - 使用多块GPU
-
----
-
-## 信号与槽连接
-
-### 跨模块通信
-
-```
-MainWindow
-├── TestWidget.model_loaded --→ AnnotateWidget.set_yolo_model
-├── _set_project_config
-│   ├── --→ AnnotateWidget.set_project_config
-│   ├── --→ TrainWidget.set_project_config
-│   └── --→ TestWidget.set_project_config
-└── AnnotatorWidget
-    └── YOLOTrainer signals
-        ├── progress_signal
-        ├── log_signal
-        ├── finished_signal
-        └── error_signal
-```
-
-### 标注模块内部信号
-
-```
-AnnotationScene.annotations_changed --→ (通知标注变化)
-_SamWorker signals (QThread)
-├── encoding_done
-├── prediction_done
-└── error_occurred
+1. 启动应用 → 自动创建工作区目录结构
+2. 新建工作区间（或选择已有）
+3. 标注页面：
+   a. 导入图片/视频/目录
+   b. 添加类别
+   c. 使用标注工具标注（矩形/多边形/关键点/OBB）
+   d.（可选）使用 SAM2/Grounding DINO 辅助标注
+   e.（可选）使用 YOLO+SAM2 批量自动标注
+   f. 导出 YOLO 格式数据集
+4. 训练页面：
+   a. 选择任务类型和模型
+   b. 配置训练参数和数据增强
+   c. 选择导出的数据集 data.yaml
+   d. 开始训练，监控进度和曲线
+5. 测试页面：
+   a. 加载训练好的模型
+   b. 图片/视频/摄像头推理
+   c.（可选）模型验证
+   d.（可选）导出模型（ONNX/TensorRT 等）
 ```
 
 ---
 
-## 数据流
+## 8. 配置系统
 
-### 标注数据流
-
-```
-用户输入 (鼠标事件)
-    ↓
-AnnotationScene.mousePressEvent
-    ↓
-创建 AnnotationItem
-    ↓
-存储到 _annotations
-    ↓
-绘制到画布 (_draw_annotation)
-    ↓
-触发 annotations_changed 信号
-    ↓
-AnnotationsWidget 保存到 _annotations_dict
-```
-
-### 训练数据流
+### 8.1 配置层次
 
 ```
-TrainWidget._on_start
-    ↓
-创建 YOLOTrainer (QThread)
-    ↓
-YOLOTrainer.run()
-    ├─ 加载 YOLO 模型
-    ├─ 调用 model.train()
-    └─ 发射信号 (progress/log/finished/error)
-    ↓
-TrainWidget 处理信号
-    ├─ _on_progress → 更新进度条
-    ├─ _on_log → 显示日志
-    ├─ _on_finished → 显示结果
-    └─ _on_error → 显示错误
+项目级配置 (project_config.json)
+├── 项目元数据 (project_name, project_path, created_at, last_opened)
+├── 类别配置 (classes: List[ClassItem])
+└── 训练配置 (train_config: TrainConfig)
+    ├── 基本训练参数 (task, model_family, epochs, batch, ...)
+    └── 数据增强参数 (16 个增强参数 + preset)
+
+应用级状态 (~/.yolo26_app/)
+├── app_state.json          # 窗口几何、当前工作区间、页面状态
+├── gpu_cache.json          # GPU 检测结果缓存
+└── recent_projects.json    # 最近项目列表
 ```
 
-### 推理数据流
+### 8.2 配置模板
+
+`core/config_template.yaml` 提供了完整的参数参考，包含训练参数、推理参数和数据增强默认值及注释说明。
+
+### 8.3 工作区间目录结构
+
+每个工作区间（项目）包含以下子目录：
 
 ```
-TestWidget._on_timer_timeout (视频流)
-TestWidget._on_select_image (单张图片)
-    ↓
-YOLOPredictor.predict_frame / predict_image
-    ↓
-YOLO 模型推理
-    ↓
-YOLOPredictor._draw_results (绘制结果)
-    ↓
-TestWidget._display_np_image (显示)
+my_project/<workspace_name>/
+├── project_config.json    # 项目配置
+├── classes.txt            # 类别列表（纯文本）
+├── annotations.json       # 标注数据
+├── images/                # 导入的图片
+├── datasets/              # 导出的数据集
+├── models/                # 项目模型
+└── runs/                  # 训练输出
 ```
 
 ---
 
-## 配置文件格式
+## 9. 数据流与持久化
 
-### project_config.json
+### 9.1 标注数据流
 
-```json
-{
-  "project_name": "my_project",
-  "project_path": "/path/to/project",
-  "classes": [
-    {"name": "person", "color": "#FF6B6B"},
-    {"name": "car", "color": "#4ECDC4"}
-  ],
-  "train_config": {
-    "task": "detect",
-    "model_size": "n",
-    "data": "/path/to/data.yaml",
-    "epochs": 100,
-    "batch": 16,
-    "imgsz": 640,
-    "device": "",
-    "optimizer": "auto",
-    "lr0": 0.01,
-    "patience": 100,
-    "project": "",
-    "name": ""
-  },
-  "created_at": "2024-01-01T00:00:00",
-  "last_opened": "2024-01-02T00:00:00"
+```
+用户交互 (鼠标事件)
+    ↓
+AnnotationScene (内存中的 _annotations 列表)
+    ↓ annotations_changed 信号
+AnnotateWidget (自动保存防抖 1500ms)
+    ↓ write_json_atomic()
+annotations.json (项目目录，原子写入)
+    ↓ 加载时
+AnnotationScene.set_annotations() (恢复到画布)
+```
+
+### 9.2 训练数据流
+
+```
+TrainWidget (配置 UI)
+    ↓ 收集参数
+TrainConfig (dataclass)
+    ↓
+YOLOTrainer(QThread)
+    ↓ model.train()
+Ultralytics YOLO (训练引擎)
+    ↓ 回调
+progress_signal / log_signal (实时反馈到 UI)
+    ↓ 训练完成
+runs/<experiment_name>/weights/best.pt (模型产出)
+    ↓ finished_signal
+TrainWidget (显示完成消息和指标)
+```
+
+### 9.3 推理数据流
+
+```
+TestWidget (选择模型和输入源)
+    ↓
+YOLOPredictor.load_model() → YOLOPredictor.predict_image/frame()
+    ↓
+Ultralytics YOLO (推理引擎)
+    ↓ results.plot()
+标注图像 (numpy array)
+    ↓
+TestWidget (显示结果)
+```
+
+### 9.4 原子写入保障
+
+关键文件写入使用两种原子模式：
+
+1. **`ProjectConfig.save()`**：`tempfile.mkstemp` → 写入 → `os.replace`（POSIX 原子操作）
+2. **`write_json_atomic()`**：`QSaveFile` → `commit()`（Qt 原子写入，读者永远看不到部分文件）
+
+导出数据集使用临时目录模式：先写入同级隐藏临时目录 → 全部完成后 `os.replace` 重命名 → 异常时清理临时目录。
+
+---
+
+## 10. 线程模型
+
+### 10.1 线程使用概览
+
+| 线程 | 类 | 触发场景 | 停止方式 |
+|------|----|----------|----------|
+| 训练线程 | `YOLOTrainer(QThread)` | 用户点击"开始训练" | `stop()` 设置 `_stop_flag`，通过回调中断 |
+| GPU 检测线程 | `GPUDetectWorker(QThread)` | 应用启动 | 自动完成（子进程超时机制） |
+| 推理工作线程 | `TestWidget` 内部 QThread | 实时推理/视频推理 | 停止标志 + `wait(timeout)` |
+| 自动标注线程 | `AnnotateWidget` 内部 QThread | 批量检测 | 停止标志 + `wait(timeout)` |
+| 通用任务线程 | `_TaskWorker(QThread)` | `TaskManager.submit()` | 超时取消 + `quit()` + `wait(1000)` |
+| SAM2 编码线程 | `AnnotateWidget` 内部 | SAM 交互标注 | 标志位控制 |
+
+### 10.2 线程安全约定
+
+- **自定义 `run()` 的 QThread 不响应 `quit()`**：必须使用显式 `_stop_flag`，在回调中检查并设置 `trainer.stop_training = True`。
+- **线程引用清理**：`finished` 信号回调中将 worker 引用设为 `None`，同步 Python 和 C++ 对象清理。避免使用 lambda 连接 `finished` 信号（竞态条件）。
+- **线程 parent=None**：防止 widget 析构时过早终止运行中的线程。
+- **窗口关闭清理**：`MainWindow.closeEvent` 中显式停止所有运行中的 worker（`quit()` + `wait(3000)`）。
+- **GPU 缓存**：`wait(5000)` 超时等待防止无限阻塞。
+
+---
+
+## 11. 样式系统
+
+### 11.1 设计令牌
+
+样式系统基于设计令牌（Design Token）方法，将颜色、字体、间距、圆角等视觉属性抽象为字典常量：
+
+```python
+DARK_TOKENS = {
+    "color_base": "#1e1e2e",       # 基础背景色
+    "color_mantle": "#181825",     # 次级背景色
+    "color_surface_0": "#313244",  # 表面色 0
+    "color_text": "#cdd6f4",       # 主文本色
+    "color_primary": "#89b4fa",    # 主题强调色
+    "font_sans": '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    "font_size_base": "13px",
+    "space_4": "16px",
+    "radius_md": "6px",
+    # ... 更多令牌
 }
 ```
 
-### data.yaml (YOLO数据集配置)
+### 11.2 QSS 生成
 
-```yaml
-path: /path/to/exported/dataset
-train: images/train
-val: images/val
-nc: 2
-names: ['person', 'car']
-```
+`DARK_STYLE` 和 `LIGHT_STYLE` 是预生成的 QSS 字符串，通过 `get_style(theme)` 返回。样式覆盖了所有自定义控件（sidebar、navButton、topBar、configCard、primaryButton、warningLabel 等）。
 
----
+### 11.3 配色方案
 
-## 错误处理
-
-### 常见错误及解决方案
-
-| 错误 | 原因 | 解决方案 |
-|------|------|---------|
-| "SAM 模型加载失败" | SAM未安装或模型路径错误 | 安装segment-anything，下载模型权重 |
-| "无法打开视频源" | 摄像头被占用或视频文件损坏 | 关闭其他应用，检查视频文件 |
-| "模型加载失败" | 模型文件不存在或格式错误 | 检查文件路径，使用正确的模型格式 |
-| "数据集配置文件不存在" | data.yaml路径错误 | 检查并更正数据集配置文件路径 |
-
-### 日志查看
-
-训练过程的日志通过 `YOLOTrainer.log_signal` 实时显示在训练界面的日志文本框中。
+采用 **Catppuccin** 配色方案：
+- 暗色主题：Mocha 变体（深色背景 + 柔和前景）
+- 亮色主题：Latte 变体（浅色背景 + 深色前景）
 
 ---
 
-## 扩展开发
+## 12. 工程约定与最佳实践
 
-### 添加新的自动标注器
+### 12.1 文件 I/O 约定
 
-1. 在 `auto_annotator.py` 中创建新的标注器类
-2. 实现 `annotate` 方法返回 `List[AnnotationItem]`
-3. 在 `annotate_widget.py` 中添加对应的UI和调用逻辑
+- **原子写入**：所有关键配置文件（`project_config.json`、`annotations.json`）必须使用原子写入模式。
+- **中文路径**：OpenCV 的 `imread`/`imwrite` 在 Windows 上不支持中文路径，必须使用 `imread_unicode`/`imwrite_unicode`（`np.fromfile` + `cv2.imdecode`）。
+- **备份机制**：关键文件写入前创建备份，导出操作使用临时目录 + 原子重命名。
 
-### 添加新的导出格式
+### 12.2 UI 约定
 
-1. 在 `yolo_exporter.py` 中添加新的导出方法
-2. 实现数据转换逻辑
-3. 在UI中添加导出选项
+- **UI 阻塞操作**：GroundingDINO 检测等耗时操作必须在 QThread 子类中执行。
+- **QGraphicsScene 清理**：Pixmap items 必须在添加新 item 前显式移除，防止内存泄漏。
+- **工作区间切换**：必须包含错误处理，失败时回滚到上一个选择。
+- **导入对话框**：图片/视频导入对话框起始目录为项目的 images 目录。
+- **大型导入**：>50 项的导入必须显示 `QProgressDialog` 并支持取消。
+- **窗口几何持久化**：使用 `normalGeometry()` 保存（兼容最大化/全屏），加载时包含屏幕边界检查。
 
-### 添加新的推理输入源
+### 12.3 线程约定
 
-1. 在 `test_widget.py` 中添加新的输入处理方法
-2. 实现帧获取和推理逻辑
-3. 更新UI添加对应的输入按钮
+- **停止方法**：`stop()` 方法必须包含基于超时的 `wait()`（如 `wait(5000)`），防止无限阻塞。
+- **回调清理**：`finished` 信号回调中必须将 worker 引用设为 `None`。
+- **Lambda 禁用**：`finished` 信号连接禁止使用 lambda（竞态条件），使用独立方法。
+
+### 12.4 项目结构约定
+
+- **代码核心隔离**：所有功能代码在 `code/` 文件夹下，用户更新只需替换此目录。
+- **系统模型**：存储在 `system_model/` 文件夹，按用途分子目录。
+- **用户工作区**：在 `my_project/` 文件夹下，`default` 子目录作为自由空间模式回退。
+- **.gitignore 模式**：使用 `dir/*` + `!dir/.gitkeep` 模式保留目录结构但忽略内容。
+- **入口点**：`main.py` 在项目根目录。
+- **文档**：README 同时提供中英文版本。
+
+### 12.5 日志约定
+
+- 使用标准 `logging` 模块，输出到 `workspace/logs/app.log`。
+- 按日期切割（`TimedRotatingFileHandler`），保留 7 天。
+- 控制台输出 WARNING 及以上级别。
+- 业务模块通过 `get_logger(__name__)` 获取 logger 实例。
+
+### 12.6 ONNX Runtime 版本检测
+
+`onnxruntime.__version__` 在不同安装中不可靠，应使用 `importlib.metadata.version('onnxruntime')` 并配合 `getattr` 回退进行版本检查。
 
 ---
 
-## 许可证
-
-本项目基于 [MIT License](LICENSE) 开源。
-
-**注意**：本项目依赖 Ultralytics YOLO26，其采用 [AGPL-3.0](https://github.com/ultralytics/ultralytics/blob/main/LICENSE) 许可证。如果修改并分发 Ultralytics 源码，需遵守 AGPL-3.0 的要求。
+*本文档由代码分析自动生成，反映项目当前状态。如需更新，请重新运行分析。*

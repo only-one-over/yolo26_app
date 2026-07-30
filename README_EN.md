@@ -24,6 +24,7 @@
 | **Bounding Box** | Drag to draw detection boxes with any aspect ratio |
 | **Polygon** | Click to add points, double-click to complete polygon |
 | **Keypoint Annotation** | Custom keypoint count per class, click to place numbered keypoints with auto-connecting lines, double-click/Enter to finish |
+| **OBB (Oriented Bounding Box)** | For annotating rotated objects (aerial, document, shelf, etc.) — drag to define bounding rectangle, then drag again to rotate |
 | **SAM 2 Interactive Segmentation** | Click target area to auto-generate segmentation masks, supports SAM 2 models (Hiera-T/S/B+/L) |
 | **Grounding DINO** | Zero-shot detection via text prompts (e.g. "person, car") |
 | **Batch Detection** | Background thread with progress dialog and cancel support |
@@ -93,6 +94,7 @@ output_dir/
 **YOLO Label Format:**
 - Bounding Box: `<class_index> <center_x> <center_y> <width> <height>` (normalized)
 - Polygon: `<class_index> <x1> <y1> <x2> <y2> ... <xn> <yn>` (normalized)
+- OBB (Oriented Bounding Box): `<class_index> <center_x> <center_y> <width> <height> <angle>` (normalized, angle in radians)
 
 ### 🏋️ Model Training
 
@@ -374,12 +376,28 @@ Click "+" in the class panel to add annotation classes. Each class is auto-assig
 |------|-----------|----------|
 | Bounding Box | Drag to draw | — |
 | Polygon | Click points, double-click to finish | — |
+| Keypoint | Click to place keypoints, double-click/Enter to finish | — |
+| OBB | Drag to define bounding rectangle, then drag again to rotate | — |
 | Select | Click to select | — |
 | Delete | Delete selected via Delete or Space | Delete / Space |
 | Undo | Undo last action | Ctrl+Z |
 | Redo | Redo undone action | Ctrl+Shift+Z |
 | Previous | Switch to previous image | ↑ |
 | Next | Switch to next image | ↓ or Shift+Space |
+| Switch to Rectangle tool | Switch to Rectangle tool mode | R |
+| Switch to Polygon tool | Switch to Polygon tool mode | P |
+| Switch to OBB tool | Switch to OBB tool mode | O |
+| Switch to Keypoint tool | Switch to Keypoint tool mode | K |
+| Switch to Select tool | Switch to Select tool mode | S |
+
+#### Polygon Vertex Editing
+
+After selecting a polygon annotation, vertices can be fine-edited:
+
+- **Drag vertex**: hold and drag a vertex handle to update polygon shape in real time
+- **Right-click to delete vertex**: right-click on a vertex handle to remove it (minimum 3 vertices retained)
+- **Double-click edge to add vertex**: double-click on a polygon edge to insert a new vertex at that position
+- All editing operations support Ctrl+Z undo
 
 #### Step 5: Assisted Annotation (Optional)
 

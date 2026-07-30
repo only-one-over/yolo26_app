@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.test_widget: Optional["TestWidget"] = None
         self._page_widgets: dict[int, QWidget] = {}
         self._requested_page_index = 0
+        self._pending_train_state: Optional[dict] = None
 
         self.setWindowTitle("YOLO26 App")
         self.setMinimumSize(1024, 768)
@@ -126,7 +127,7 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._recovery_save_timer = QTimer(self)
         self._recovery_save_timer.setSingleShot(True)
-        self._recovery_save_timer.setInterval(0)
+        self._recovery_save_timer.setInterval(500)
         self._recovery_save_timer.timeout.connect(self._save_app_state)
         self._env_checked = False
         QTimer.singleShot(25, self._finish_startup)
@@ -265,6 +266,11 @@ class MainWindow(QMainWindow):
 
             self.train_widget = TrainWidget()
             page = self.train_widget
+            if self._pending_train_state is not None:
+                try:
+                    self.train_widget.restore_state(self._pending_train_state)
+                except Exception:
+                    pass
             if self.current_project_config is not None:
                 self.train_widget.set_project_config(self.current_project_config)
         elif index == 2 and self.test_widget is None:
@@ -297,11 +303,8 @@ class MainWindow(QMainWindow):
         self._detect_gpu_async()
 
     def _set_project_config(self, config: ProjectConfig) -> None:
-        if self.annotate_widget is not None and self.current_project_config is not None:
-            try:
-                self.annotate_widget.flush_autosave()
-            except Exception:
-                pass
+        # 注意：调用方（_on_workspace_changed / _restore_app_state）负责在切换前
+        # 调用 flush_autosave 保存旧数据，此处不再重复保存以避免双重写入。
         self.current_project_config = config
         self.setWindowTitle(f"YOLO26 App - {config.project_name}")
         annotate_widget = self._ensure_widget(0)
@@ -423,6 +426,14 @@ class MainWindow(QMainWindow):
             self.annotate_widget.flush_autosave()
             # 停止标注页面的后台线程，避免 QThread 在 widget 销毁时仍在运行
             self.annotate_widget.stop_background_threads()
+        # 停止环境自检线程
+        if hasattr(self, '_env_check_worker') and self._env_check_worker is not None:
+            try:
+                if self._env_check_worker.isRunning():
+                    self._env_check_worker.quit()
+                    self._env_check_worker.wait(2000)
+            except RuntimeError:
+                pass
         # 停止 GPU 检测线程，避免 QThread 在窗口销毁时仍在运行
         if self._gpu_detect_worker is not None:
             try:
@@ -491,6 +502,11 @@ class MainWindow(QMainWindow):
             state["last_project_path"] = self.current_project_config.project_path
         elif self.annotate_widget is not None:
             state["annotate_state"] = self.annotate_widget.save_state()
+        if self.train_widget is not None:
+            try:
+                state["train_state"] = self.train_widget.save_state()
+            except Exception:
+                logger.exception("Failed to save train_state")
         try:
             write_json_atomic(APP_STATE_FILE, state)
         except (PermissionError, OSError):
@@ -559,6 +575,7 @@ class MainWindow(QMainWindow):
         active_page = state.get("active_page", 0)
         if isinstance(active_page, int) and active_page in (0, 1, 2):
             self._requested_page_index = active_page
+        self._pending_train_state = state.get("train_state")
 
     def _new_project(self) -> None:
         dialog = NewProjectDialog(self)
@@ -885,84 +902,100 @@ class MainWindow(QMainWindow):
         """启动后检测常见环境问题并弹窗给出修复命令。
 
         通过 ``self._env_checked`` 标志避免重复弹窗。
+        所有检测在后台线程执行，避免阻塞主线程 UI。
         """
         if self._env_checked:
             return
         self._env_checked = True
 
-        issues: List[Tuple[str, str]] = []
+        from PyQt6.QtCore import QThread, pyqtSignal
 
-        # 检测 1：CUDA 不可用但有 NVIDIA GPU
-        try:
-            import torch
+        class _EnvCheckWorker(QThread):
+            issues_ready = pyqtSignal(list)
 
-            cuda_available = torch.cuda.is_available()
-            nvidia_smi_ok = (
-                subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0
+            def run(self):
+                issues: list = []
+
+                # 检测 1：CUDA 不可用但有 NVIDIA GPU
+                try:
+                    import torch
+
+                    cuda_available = torch.cuda.is_available()
+                    nvidia_smi_ok = (
+                        subprocess.run(
+                            ["nvidia-smi"], capture_output=True,
+                            timeout=10,
+                        ).returncode == 0
+                    )
+                    if not cuda_available and nvidia_smi_ok:
+                        issues.append(
+                            (
+                                "PyTorch GPU 不可用",
+                                "检测到 NVIDIA GPU 但 PyTorch 不可用 GPU 加速。\n\n"
+                                "请重新安装 CUDA 版 PyTorch:\n"
+                                "pip install torch torchvision --index-url "
+                                "https://download.pytorch.org/whl/cu121\n\n"
+                                "或参考 README 中的 GPU 安装步骤。",
+                            )
+                        )
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("CUDA 检测异常: %s", e)
+
+                # 检测 2：TensorRT 与 Ultralytics 版本不匹配
+                try:
+                    import tensorrt
+                    import ultralytics
+
+                    trt_major = int(tensorrt.__version__.split(".")[0])
+                    ultra_minor = int(ultralytics.__version__.split(".")[1])
+                    if trt_major >= 10 and ultra_minor < 3:
+                        issues.append(
+                            (
+                                "TensorRT 版本不匹配",
+                                f"TensorRT {tensorrt.__version__} 需 Ultralytics ≥ 8.3.0"
+                                f"(当前 {ultralytics.__version__})。\n\n"
+                                "请升级 Ultralytics:\n"
+                                "pip install -U ultralytics",
+                            )
+                        )
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("TensorRT 版本检测异常: %s", e)
+
+                # 检测 3：onnxruntime 与 onnxruntime-gpu 同时安装
+                try:
+                    import importlib.metadata as md
+
+                    installed = [d.metadata["Name"].lower() for d in md.distributions()]
+                    if "onnxruntime" in installed and "onnxruntime-gpu" in installed:
+                        issues.append(
+                            (
+                                "ONNX Runtime 冲突",
+                                "检测到 onnxruntime 与 onnxruntime-gpu 同时安装,会产生冲突。\n\n"
+                                "请卸载其一:\n"
+                                "pip uninstall onnxruntime onnxruntime-gpu\n"
+                                "pip install onnxruntime-gpu  # 或 onnxruntime(CPU 版)",
+                            )
+                        )
+                except Exception:
+                    pass
+
+                self.issues_ready.emit(issues)
+
+        def _on_env_issues_ready(issues: list) -> None:
+            if not issues:
+                return
+            for title, message in issues:
+                logger.warning("环境问题:%s - %s", title, message.replace("\n", " | "))
+            combined = "\n\n".join(
+                f"【{title}】\n{message}" for title, message in issues
             )
-            if not cuda_available and nvidia_smi_ok:
-                issues.append(
-                    (
-                        "PyTorch GPU 不可用",
-                        "检测到 NVIDIA GPU 但 PyTorch 不可用 GPU 加速。\n\n"
-                        "请重新安装 CUDA 版 PyTorch:\n"
-                        "pip install torch torchvision --index-url "
-                        "https://download.pytorch.org/whl/cu121\n\n"
-                        "或参考 README 中的 GPU 安装步骤。",
-                    )
-                )
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.warning("CUDA 检测异常: %s", e)
+            QMessageBox.warning(self, "环境问题检测", combined)
 
-        # 检测 2：TensorRT 与 Ultralytics 版本不匹配
-        try:
-            import tensorrt
-            import ultralytics
-
-            trt_major = int(tensorrt.__version__.split(".")[0])
-            ultra_minor = int(ultralytics.__version__.split(".")[1])
-            if trt_major >= 10 and ultra_minor < 3:
-                issues.append(
-                    (
-                        "TensorRT 版本不匹配",
-                        f"TensorRT {tensorrt.__version__} 需 Ultralytics ≥ 8.3.0"
-                        f"(当前 {ultralytics.__version__})。\n\n"
-                        "请升级 Ultralytics:\n"
-                        "pip install -U ultralytics",
-                    )
-                )
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.warning("TensorRT 版本检测异常: %s", e)
-
-        # 检测 3：onnxruntime 与 onnxruntime-gpu 同时安装
-        try:
-            import importlib.metadata as md
-
-            installed = [d.metadata["Name"].lower() for d in md.distributions()]
-            if "onnxruntime" in installed and "onnxruntime-gpu" in installed:
-                issues.append(
-                    (
-                        "ONNX Runtime 冲突",
-                        "检测到 onnxruntime 与 onnxruntime-gpu 同时安装,会产生冲突。\n\n"
-                        "请卸载其一:\n"
-                        "pip uninstall onnxruntime onnxruntime-gpu\n"
-                        "pip install onnxruntime-gpu  # 或 onnxruntime(CPU 版)",
-                    )
-                )
-        except Exception:
-            pass
-
-        if not issues:
-            return
-
-        # 记录每个 issue 并合并为一个对话框弹出
-        for title, message in issues:
-            logger.warning("环境问题:%s - %s", title, message.replace("\n", " | "))
-        combined = "\n\n".join(
-            f"【{title}】\n{message}" for title, message in issues
-        )
-        QMessageBox.warning(self, "环境问题检测", combined)
+        self._env_check_worker = _EnvCheckWorker(parent=None)
+        self._env_check_worker.issues_ready.connect(_on_env_issues_ready)
+        self._env_check_worker.finished.connect(self._env_check_worker.deleteLater)
+        self._env_check_worker.start()

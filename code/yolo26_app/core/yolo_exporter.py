@@ -1,3 +1,4 @@
+import math
 import os
 import random
 import shutil
@@ -92,6 +93,11 @@ class YOLOExporter:
                         if ann.item_type in ("rect", "keypoint") and ann.keypoints:
                             if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0 and len(ann.keypoints) == kpt_count:
                                 has_valid_annotation = True
+                    elif task == "obb":
+                        # OBB 任务:仅旋转框标注有效(外接矩形宽高 > 0)
+                        if ann.item_type == "obb" and ann.rect is not None:
+                            if ann.rect.width() > 0 and ann.rect.height() > 0:
+                                has_valid_annotation = True
                     elif task == "classify":
                         if 0 <= ann.class_index < nc:
                             has_valid_annotation = True
@@ -185,6 +191,9 @@ class YOLOExporter:
                         if ann.item_type == "rect":
                             if task == "segment":
                                 continue
+                            if task == "obb":
+                                # OBB 任务跳过普通矩形(无旋转角度信息)
+                                continue
                             w = ann.rect.width()
                             h = ann.rect.height()
                             if w < 1 or h < 1:
@@ -216,6 +225,9 @@ class YOLOExporter:
                         elif ann.item_type == "polygon":
                             if ann.polygon.size() < 3:
                                 continue
+                            if task == "obb":
+                                # OBB 任务跳过普通多边形(无旋转角度信息)
+                                continue
                             if task == "segment":
                                 pts = [(pt.x(), pt.y()) for pt in ann.polygon]
                                 pts_np = np.array(pts, dtype=np.float32)
@@ -246,6 +258,31 @@ class YOLOExporter:
                                 if nw <= 0 or nh <= 0:
                                     continue
                                 lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+                        elif ann.item_type == "obb":
+                            # OBB 旋转框导出:仅 task == "obb" 时输出
+                            if task != "obb":
+                                continue
+                            if ann.rect is None:
+                                continue
+                            w = ann.rect.width()
+                            h = ann.rect.height()
+                            if w < 1 or h < 1:
+                                continue
+                            cx = (ann.rect.x() + w / 2) / img_w
+                            cy = (ann.rect.y() + h / 2) / img_h
+                            nw = w / img_w
+                            nh = h / img_h
+                            cx = max(0.0, min(1.0, cx))
+                            cy = max(0.0, min(1.0, cy))
+                            nw = max(0.0, min(1.0, nw))
+                            nh = max(0.0, min(1.0, nh))
+                            if nw <= 0 or nh <= 0:
+                                continue
+                            # angle 字段为弧度,导出时转为角度(度)
+                            angle_deg = math.degrees(ann.angle)
+                            lines.append(
+                                f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f} {angle_deg:.6f}"
+                            )
                         elif ann.item_type == "keypoint":
                             if task == "pose":
                                 if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0:

@@ -29,9 +29,10 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
     QTabWidget,
+    QSplitter,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QCloseEvent, QPixmap
+from PyQt6.QtGui import QColor, QCloseEvent, QPixmap, QShowEvent
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig, normalize_augmentation_preset
 from yolo26_app.core.logger import get_logger
@@ -109,22 +110,32 @@ class TrainWidget(QWidget):
         self._csv_timer.setInterval(5000)
         self._csv_timer.timeout.connect(self._refresh_curves)
         self._current_save_dir: Optional[Path] = None
+        self._pending_scroll_y: Optional[int] = None
+        self._scroll_animated: bool = False
 
     def _setup_ui(self) -> None:
+        # 使用 QSplitter 替代 QHBoxLayout，使左右面板可拖动调整宽度
+        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._splitter.setContentsMargins(0, 0, 0, 0)
+        self._splitter.setHandleWidth(2)
+        self._splitter.setChildrenCollapsible(False)
+
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        main_layout.addWidget(self._splitter)
 
         # Left panel: configuration (scrollable)
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(12, 12, 8, 12)
         left_layout.setSpacing(8)
 
-        # Right panel: monitoring (fixed min width)
+        # Right panel: monitoring
         right_panel = QWidget()
         right_panel.setMinimumWidth(360)
         right_panel.setObjectName("trainMonitorPanel")
@@ -360,8 +371,8 @@ class TrainWidget(QWidget):
         left_layout.addWidget(aug_group)
 
         left_layout.addStretch()
-        left_scroll.setWidget(left_container)
-        main_layout.addWidget(left_scroll, 1)
+        self.left_scroll.setWidget(left_container)
+        self._splitter.addWidget(self.left_scroll)
 
         self.size_combo.currentTextChanged.connect(self._update_model_info)
         self.task_combo.currentTextChanged.connect(self._update_task_info)
@@ -488,7 +499,12 @@ class TrainWidget(QWidget):
         self.open_runs_btn.clicked.connect(self._on_open_runs)
         right_layout.addWidget(self.open_runs_btn)
 
-        main_layout.addWidget(right_panel, 0)
+        self._splitter.addWidget(right_panel)
+        # 设置初始比例：左侧 3 : 右侧 2
+        self._splitter.setStretchFactor(0, 3)
+        self._splitter.setStretchFactor(1, 2)
+        # 设置初始 splitter 位置（右侧约 400px）
+        self._splitter.setSizes([600, 400])
 
     def _update_model_info(self, size: str) -> None:
         self._model_info_label.setText(MODEL_INFO.get(size, ""))
@@ -872,6 +888,42 @@ class TrainWidget(QWidget):
             if self._trainer.isRunning():
                 logger.warning("警告:训练线程未在 30 秒内退出,可能仍在后台运行")
         super().closeEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        # 首次显示时重新应用 splitter 比例，防止布局重算导致右侧面板拉伸动画
+        if not getattr(self, '_splitter_initialized', False):
+            self._splitter_initialized = True
+            QTimer.singleShot(0, lambda: self._splitter.setSizes([600, 400]))
+        if self._scroll_animated or self._pending_scroll_y is None:
+            return
+        self._scroll_animated = True
+        pending = self._pending_scroll_y
+        self._pending_scroll_y = None
+        # 延迟到下一个事件循环，确保布局已完成、scrollbar maximum 已更新
+        def _apply_scroll():
+            scrollbar = self.left_scroll.verticalScrollBar()
+            if scrollbar.maximum() > 0:
+                scrollbar.setValue(min(pending, scrollbar.maximum()))
+            self._scroll_animated = False
+        QTimer.singleShot(0, _apply_scroll)
+
+    def save_state(self) -> dict:
+        """序列化训练页状态用于持久化(目前仅左侧配置面板的垂直滚动位置)"""
+        try:
+            scroll_y = int(self.left_scroll.verticalScrollBar().value())
+        except Exception:
+            scroll_y = 0
+        return {"scroll_y": scroll_y}
+
+    def restore_state(self, state: Optional[dict]) -> None:
+        """从 dict 恢复状态(缓存滚动位置,等 showEvent 触发时应用)"""
+        if not state:
+            return
+        try:
+            self._pending_scroll_y = int(state.get("scroll_y", 0))
+        except (TypeError, ValueError):
+            self._pending_scroll_y = None
 
     def _on_progress(self, current: int, total: int) -> None:
         self.progress_bar.setMaximum(total)

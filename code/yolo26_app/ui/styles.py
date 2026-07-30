@@ -228,14 +228,14 @@ def _build_group_box_style(t):
     return "\n".join(lines) + "\n"
 
 
-def get_style(theme="dark"):
-    if theme == "light":
-        return _build_style(LIGHT_TOKENS)
-    return _build_style(DARK_TOKENS)
-
-
 DARK_STYLE = _build_style(DARK_TOKENS)
 LIGHT_STYLE = _build_style(LIGHT_TOKENS)
+
+_STYLE_CACHE = {"dark": DARK_STYLE, "light": LIGHT_STYLE}
+
+
+def get_style(theme="dark"):
+    return _STYLE_CACHE.get(theme, DARK_STYLE)
 TOOLBAR_BUTTON_STYLE = _build_toolbar_button_style(DARK_TOKENS)
 START_BUTTON_STYLE = _build_start_button_style(DARK_TOKENS)
 STOP_BUTTON_STYLE = _build_stop_button_style(DARK_TOKENS)
