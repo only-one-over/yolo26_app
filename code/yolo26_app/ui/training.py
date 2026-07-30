@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QCloseEvent, QPixmap, QShowEvent
+from PyQt6.QtGui import QCloseEvent, QPixmap, QShowEvent
 
 from yolo26_app.core.config import TrainConfig, ProjectConfig, normalize_augmentation_preset
 from yolo26_app.core.logger import get_logger
@@ -77,17 +77,22 @@ def parse_results_csv(csv_path: Path) -> dict:
     columns: dict = {}
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
-            reader = _csv.DictReader(_csv.reader(f))
+            reader = _csv.DictReader(f)
             # Ultralytics 的 CSV 表头可能包含前导空格(如 " train/box_loss"),需 strip
             fieldnames = [fn.strip() for fn in reader.fieldnames or []]
             for fn in fieldnames:
                 columns[fn] = []
             for row in reader:
+                # 先对 row 字典的键也做 strip，使其与 fieldnames 一致
+                row = {
+                    str(k).strip() if k is not None else "": str(v).strip()
+                    for k, v in row.items()
+                }
                 # 检查行是否完整(所有字段都有值且可转 float)
                 try:
                     parsed_row = {}
                     for fn in fieldnames:
-                        val = (row.get(fn) or "").strip()
+                        val = row.get(fn, "")
                         if not val:
                             raise ValueError("incomplete row")
                         parsed_row[fn] = float(val)
@@ -858,6 +863,7 @@ class TrainWidget(QWidget):
         self._trainer.log_signal.connect(self._on_log)
         self._trainer.finished_signal.connect(self._on_finished)
         self._trainer.error_signal.connect(self._on_error)
+        self._trainer.save_dir_signal.connect(self._on_save_dir)
 
         self.log_text.clear()
         self.progress_bar.setValue(0)
@@ -967,6 +973,10 @@ class TrainWidget(QWidget):
         for col_name, legend_name, color in map_columns:
             if col_name in columns:
                 self.map_plot.plot(epochs, columns[col_name], pen=pyqtgraph.mkPen(color, width=2), name=legend_name)
+
+    def _on_save_dir(self, save_dir: str) -> None:
+        """训练开始后接收 Ultralytics 实际保存目录，用于读取 CSV 和图表。"""
+        self._current_save_dir = Path(save_dir)
 
     def _on_finished(self, message: str) -> None:
         self._csv_timer.stop()

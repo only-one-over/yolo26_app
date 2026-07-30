@@ -19,7 +19,7 @@
 #   pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cpu
 
 # ===== 核心依赖(锁定版本) =====
-ultralytics==8.3.20
+ultralytics==8.4.0
 PyQt6==6.7.1
 opencv-python==4.10.0.84
 numpy==1.26.4
@@ -42,5 +42,5 @@ onnxruntime-gpu==1.18.1
 # Intel RealSense:
 # pyrealsense2==2.55.10.1359
 #
-# TensorRT 10.x(需 CUDA 12.x + Ultralytics ≥ 8.3.0):
+# TensorRT 10.x(需 CUDA 12.x + Ultralytics ≥ 8.4.0):
 # tensorrt==10.2.0

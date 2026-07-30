@@ -1,6 +1,6 @@
 # ===== 核心依赖(必装) =====
 # 直接 pip install -r requirements.txt 或 pip install -e .
-ultralytics>=8.0
+ultralytics>=8.4.0
 PyQt6>=6.0
 opencv-python>=4.6.0
 numpy>=1.20.0
@@ -17,7 +17,7 @@ pyqtgraph>=0.13.0
 # Intel RealSense 深度相机:
 #   pip install -e ".[realsense]"
 #
-# TensorRT 极速 GPU 推理(需 Ultralytics ≥ 8.3.0 配合 TensorRT 10.x):
+# TensorRT 极速 GPU 推理(需 Ultralytics ≥ 8.4.0 配合 TensorRT 10.x):
 #   pip install -e ".[tensorrt]"
 #
 # 全部可选依赖:
@@ -26,4 +26,4 @@ pyqtgraph>=0.13.0
 # ===== 锁定版依赖(推荐生产环境) =====
 # 若需要一套经过完整测试的稳定版本组合,改用:
 #   pip install -r requirements-lock.txt
-# 含 PyTorch 2.3.1 + CUDA 12.1 + Ultralytics 8.3.20 + TensorRT 10.2.0 等锁定版本
+# 含 PyTorch 2.3.1 + CUDA 12.1 + Ultralytics 8.4.0 + TensorRT 10.2.0 等锁定版本

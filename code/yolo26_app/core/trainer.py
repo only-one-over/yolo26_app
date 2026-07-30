@@ -12,6 +12,7 @@ class YOLOTrainer(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(str)
     error_signal = pyqtSignal(str)
+    save_dir_signal = pyqtSignal(str)
 
     def __init__(self, config: TrainConfig, project_path: str) -> None:
         super().__init__()
@@ -159,7 +160,15 @@ class YOLOTrainer(QThread):
                 self.finished_signal.emit("训练已被用户停止")
                 return
 
-            best_path = Path(project_dir) / name / "weights" / "best.pt"
+            # 使用 Ultralytics 实际保存目录，避免重复实验时路径不匹配
+            # （Ultralytics exist_ok=False，目录已存在时会自动递增为 train2/train3 等）
+            try:
+                save_dir = Path(model.trainer.save_dir)
+            except Exception:
+                save_dir = Path(project_dir) / name
+            # 通知 UI 实际保存目录，用于读取 CSV 和图表
+            self.save_dir_signal.emit(str(save_dir))
+            best_path = save_dir / "weights" / "best.pt"
             metrics_parts: list[str] = []
 
             if results is not None:

@@ -19,10 +19,7 @@ class YOLOPredictor:
         self.model: Optional[YOLO] = None
         self.model_path: str = ""
         self._is_onnx: bool = False
-        self._onnx_cpu_fallback: bool = False
-        self._shown_onnx_diag: bool = False
         self._model_task: str = ""
-        self._onnx_error: str = ""
 
     def load_model(self, path: str, task: str = "") -> bool:
         if self.model is not None:
@@ -38,17 +35,11 @@ class YOLOPredictor:
                 self._model_task = getattr(self.model, "task", "") or ""
             self.model_path = path
             self._is_onnx = path.lower().endswith(".onnx")
-            self._onnx_cpu_fallback = False
-            self._shown_onnx_diag = False
-            self._onnx_error = ""
-            if self._is_onnx:
-                self._verify_onnx_model()
             return True
         except Exception:
             self.model = None
             self.model_path = ""
             self._is_onnx = False
-            self._onnx_cpu_fallback = False
             self._model_task = ""
             return False
 
@@ -347,33 +338,6 @@ class YOLOPredictor:
                 return candidate
             i += 1
 
-    def _verify_onnx_model(self) -> None:
-        try:
-            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-            predict_kwargs = dict(source=dummy, verbose=False)
-            if self._model_task:
-                predict_kwargs["task"] = self._model_task
-            self.model.predict(**predict_kwargs)
-        except Exception:
-            self._reload_onnx_cpu()
-
-    def _reload_onnx_cpu(self) -> None:
-        old_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
-        try:
-            os.environ["CUDA_VISIBLE_DEVICES"] = ""
-            kwargs = {}
-            if self._model_task:
-                kwargs["task"] = self._model_task
-            self.model = YOLO(self.model_path, **kwargs)
-            self._onnx_cpu_fallback = True
-        except Exception as e:
-            self._onnx_error = str(e)
-        finally:
-            if old_cuda is not None:
-                os.environ["CUDA_VISIBLE_DEVICES"] = old_cuda
-            elif "CUDA_VISIBLE_DEVICES" in os.environ:
-                del os.environ["CUDA_VISIBLE_DEVICES"]
-
     def _verify_exported_model(
         self,
         model_path: str,
@@ -425,23 +389,6 @@ class YOLOPredictor:
         except Exception:
             info["class_names"] = []
         return info
-
-    @property
-    def is_onnx(self) -> bool:
-        return self._is_onnx
-
-    def get_onnx_diag(self) -> str:
-        if not self._is_onnx:
-            return ""
-        if self._onnx_cpu_fallback:
-            diag = "ONNX 模型已切换为 CPU 推理模式（GPU 推理异常）"
-            if hasattr(self, '_onnx_error') and self._onnx_error:
-                diag += f"\nCPU 重载失败: {self._onnx_error}"
-            return diag
-        if not self._shown_onnx_diag:
-            self._shown_onnx_diag = True
-            return "ONNX 模型推理未检测到目标\n可能原因: onnxruntime-gpu 与 CUDA 版本不匹配\n建议: pip install onnxruntime (使用CPU推理)"
-        return ""
 
     def _should_quantize(self) -> Optional[int]:
         if self._is_onnx:

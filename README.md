@@ -99,7 +99,7 @@ output_dir/
 **YOLO 标签格式：**
 - 矩形框：`<class_index> <center_x> <center_y> <width> <height>`（归一化坐标）
 - 多边形：`<class_index> <x1> <y1> <x2> <y2> ... <xn> <yn>`（归一化坐标）
-- OBB 旋转框：`<class_index> <center_x> <center_y> <width> <height> <angle>`（归一化坐标，angle 为弧度）
+- OBB 旋转框：`<class_index> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>`（归一化坐标，四个角点）
 
 ### 🏋️ 模型训练
 

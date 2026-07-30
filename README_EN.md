@@ -94,7 +94,7 @@ output_dir/
 **YOLO Label Format:**
 - Bounding Box: `<class_index> <center_x> <center_y> <width> <height>` (normalized)
 - Polygon: `<class_index> <x1> <y1> <x2> <y2> ... <xn> <yn>` (normalized)
-- OBB (Oriented Bounding Box): `<class_index> <center_x> <center_y> <width> <height> <angle>` (normalized, angle in radians)
+- OBB (Oriented Bounding Box): `<class_index> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>` (normalized, four corner points)
 
 ### 🏋️ Model Training
 

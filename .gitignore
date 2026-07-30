@@ -7,6 +7,9 @@ __pycache__/
 dist/
 build/
 *.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Virtual environments
 venv/
@@ -69,5 +72,3 @@ CODE_WIKI.md
 _graphify_*.py
 graphify-out/
 
-# Tests (development only)
-tests/

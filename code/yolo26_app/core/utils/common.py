@@ -1,6 +1,5 @@
 """通用工具函数:图像读写、路径处理等跨模块共享功能。"""
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np

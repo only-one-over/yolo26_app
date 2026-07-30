@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QLabel,
     QFrame,
-    QMenuBar,
     QMenu,
     QStatusBar,
     QDialog,
@@ -30,13 +29,13 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QInputDialog,
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui import QAction, QCloseEvent, QIcon, QGuiApplication
 
 from yolo26_app.core.config import ProjectConfig
 from yolo26_app.core.logger import get_logger
 from yolo26_app.core.project_manager import ProjectManager
-from yolo26_app.ui.styles import DARK_STYLE, get_style
+from yolo26_app.ui.styles import get_style
 from yolo26_app.core.persistence import write_json_atomic
 
 if TYPE_CHECKING:
@@ -915,6 +914,24 @@ class MainWindow(QMainWindow):
 
             def run(self):
                 issues: list = []
+
+                # 检测 0：Ultralytics 版本是否支持 YOLO26
+                try:
+                    import ultralytics
+                    from packaging.version import Version
+                    if Version(ultralytics.__version__) < Version("8.4.0"):
+                        issues.append(
+                            (
+                                "Ultralytics 版本过低",
+                                f"当前 ultralytics {ultralytics.__version__} 不支持 YOLO26 模型。\n\n"
+                                "YOLO26 需要 ultralytics >= 8.4.0，请升级:\n"
+                                "pip install -U ultralytics>=8.4.0",
+                            )
+                        )
+                except ImportError:
+                    pass
+                except Exception:
+                    pass
 
                 # 检测 1：CUDA 不可用但有 NVIDIA GPU
                 try:

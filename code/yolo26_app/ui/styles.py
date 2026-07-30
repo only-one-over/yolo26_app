@@ -97,7 +97,7 @@ def _build_style(t):
     lines.append(f"QPushButton:checked {{ background-color: {t['color_primary']}; color: {t['color_base']}; border-color: {t['color_primary']}; }}")
     lines.append(f"QComboBox {{ background-color: {t['color_surface_0']}; color: {t['color_text']}; border: 1px solid {t['color_surface_1']}; border-radius: {t['radius_md']}; padding: {t['space_1']} {t['space_2']}; min-height: 22px; }}")
     lines.append(f"QComboBox:hover {{ border-color: {t['color_primary']}; }}")
-    lines.append(f"QComboBox::drop-down {{ border: none; width: 24px; }}")
+    lines.append("QComboBox::drop-down { border: none; width: 24px; }")
     lines.append(f"QComboBox::down-arrow {{ image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid {t['color_text']}; margin-right: 6px; }}")
     lines.append(f"QComboBox QAbstractItemView {{ background-color: {t['color_surface_0']}; color: {t['color_text']}; border: 1px solid {t['color_surface_1']}; selection-background-color: {t['color_primary']}; selection-color: {t['color_base']}; outline: none; }}")
     lines.append(f"QLineEdit {{ background-color: {t['color_surface_0']}; color: {t['color_text']}; border: 1px solid {t['color_surface_1']}; border-radius: {t['radius_md']}; padding: {t['space_1']} {t['space_2']}; min-height: 22px; }}")
@@ -123,16 +123,16 @@ def _build_style(t):
     lines.append(f"QScrollBar:vertical {{ background-color: {t['color_base']}; width: 10px; border-radius: 5px; }}")
     lines.append(f"QScrollBar::handle:vertical {{ background-color: {t['color_surface_2']}; border-radius: 5px; min-height: 30px; }}")
     lines.append(f"QScrollBar::handle:vertical:hover {{ background-color: {t['color_primary']}; }}")
-    lines.append(f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}")
-    lines.append(f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}")
+    lines.append("QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }")
+    lines.append("QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
     lines.append(f"QScrollBar:horizontal {{ background-color: {t['color_base']}; height: 10px; border-radius: 5px; }}")
     lines.append(f"QScrollBar::handle:horizontal {{ background-color: {t['color_surface_2']}; border-radius: 5px; min-width: 30px; }}")
     lines.append(f"QScrollBar::handle:horizontal:hover {{ background-color: {t['color_primary']}; }}")
-    lines.append(f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}")
-    lines.append(f"QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}")
+    lines.append("QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }")
+    lines.append("QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }")
     lines.append(f"QSplitter::handle {{ background-color: {t['color_surface_1']}; }}")
-    lines.append(f"QSplitter::handle:horizontal {{ width: 2px; }}")
-    lines.append(f"QSplitter::handle:vertical {{ height: 2px; }}")
+    lines.append("QSplitter::handle:horizontal { width: 2px; }")
+    lines.append("QSplitter::handle:vertical { height: 2px; }")
     lines.append(f"QSplitter::handle:hover {{ background-color: {t['color_primary']}; }}")
     lines.append(f"QToolBar {{ background-color: {t['color_mantle']}; border: none; padding: {t['space_1']}; spacing: {t['space_1']}; }}")
     lines.append(f"QToolBar::separator {{ background-color: {t['color_surface_1']}; width: 1px; margin: {t['space_1']} {t['space_2']}; }}")
@@ -224,7 +224,7 @@ def _build_result_label_style(t):
 def _build_group_box_style(t):
     lines = []
     lines.append(f"QGroupBox {{ font-weight: bold; border: 1px solid {t['color_surface_1']}; border-radius: {t['radius_sm']}; margin-top: {t['space_2']}; padding-top: {t['space_4']}; }}")
-    lines.append(f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}")
+    lines.append("QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
     return "\n".join(lines) + "\n"
 
 

@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 import yaml
-from PyQt6.QtCore import QRectF
 
 from yolo26_app.core.annotation_canvas import AnnotationItem
 from yolo26_app.core.config import ClassItem
@@ -260,6 +259,8 @@ class YOLOExporter:
                                 lines.append(f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
                         elif ann.item_type == "obb":
                             # OBB 旋转框导出:仅 task == "obb" 时输出
+                            # Ultralytics YOLO OBB 标签格式: class x1 y1 x2 y2 x3 y3 x4 y4
+                            # 即旋转矩形四个角点的归一化坐标
                             if task != "obb":
                                 continue
                             if ann.rect is None:
@@ -268,21 +269,18 @@ class YOLOExporter:
                             h = ann.rect.height()
                             if w < 1 or h < 1:
                                 continue
-                            cx = (ann.rect.x() + w / 2) / img_w
-                            cy = (ann.rect.y() + h / 2) / img_h
-                            nw = w / img_w
-                            nh = h / img_h
-                            cx = max(0.0, min(1.0, cx))
-                            cy = max(0.0, min(1.0, cy))
-                            nw = max(0.0, min(1.0, nw))
-                            nh = max(0.0, min(1.0, nh))
-                            if nw <= 0 or nh <= 0:
-                                continue
-                            # angle 字段为弧度,导出时转为角度(度)
+                            cx = ann.rect.x() + w / 2
+                            cy = ann.rect.y() + h / 2
                             angle_deg = math.degrees(ann.angle)
-                            lines.append(
-                                f"{ann.class_index} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f} {angle_deg:.6f}"
-                            )
+                            # 使用 cv2.boxPoints 计算四个角点坐标
+                            box = cv2.boxPoints(((cx, cy), (w, h), angle_deg))
+                            coords: List[str] = [str(ann.class_index)]
+                            for px, py in box:
+                                nx = max(0.0, min(1.0, px / img_w))
+                                ny = max(0.0, min(1.0, py / img_h))
+                                coords.append(f"{nx:.6f}")
+                                coords.append(f"{ny:.6f}")
+                            lines.append(" ".join(coords))
                         elif ann.item_type == "keypoint":
                             if task == "pose":
                                 if ann.rect is not None and ann.rect.width() > 0 and ann.rect.height() > 0:

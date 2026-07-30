@@ -47,13 +47,29 @@ class _ValidateWorker(QThread):
         super().__init__()
         self.predictor = predictor
         self.data_path = data_path
+        self._stop_flag = False
+
+    def request_stop(self) -> None:
+        """设置停止标志，由 run() 协作检查。"""
+        self._stop_flag = True
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop_flag
 
     def run(self) -> None:
+        if self._stop_flag:
+            self.error_signal.emit("任务已取消")
+            return
         try:
             result = self.predictor.validate_model(self.data_path)
-            self.done_signal.emit(result)
+            if self._stop_flag:
+                self.error_signal.emit("任务已取消")
+            else:
+                self.done_signal.emit(result)
         except Exception as e:
-            self.error_signal.emit(str(e))
+            if not self._stop_flag:
+                self.error_signal.emit(str(e))
 
 
 class _ExportWorker(QThread):
@@ -66,13 +82,29 @@ class _ExportWorker(QThread):
         self.format = format
         self.output_dir = output_dir
         self.kwargs = kwargs
+        self._stop_flag = False
+
+    def request_stop(self) -> None:
+        """设置停止标志，由 run() 协作检查。"""
+        self._stop_flag = True
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop_flag
 
     def run(self) -> None:
+        if self._stop_flag:
+            self.error_signal.emit("任务已取消")
+            return
         try:
             exported_path, success, error_msg = self.predictor.export_model(self.format, self.output_dir, **self.kwargs)
-            self.done_signal.emit(exported_path, success, error_msg)
+            if self._stop_flag:
+                self.error_signal.emit("任务已取消")
+            else:
+                self.done_signal.emit(exported_path, success, error_msg)
         except Exception as e:
-            self.error_signal.emit(str(e))
+            if not self._stop_flag:
+                self.error_signal.emit(str(e))
 
 
 class _ImagePredictWorker(QThread):
@@ -88,16 +120,32 @@ class _ImagePredictWorker(QThread):
         self.imgsz = imgsz
         self.device = device
         self.max_det = max_det
+        self._stop_flag = False
+
+    def request_stop(self) -> None:
+        """设置停止标志，由 run() 协作检查。"""
+        self._stop_flag = True
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop_flag
 
     def run(self) -> None:
+        if self._stop_flag:
+            self.error_signal.emit("任务已取消")
+            return
         try:
             annotated, results = self.predictor.predict_image(
                 self.image_path, conf=self.conf, iou=self.iou,
                 imgsz=self.imgsz, device=self.device, max_det=self.max_det
             )
-            self.done_signal.emit(annotated, results)
+            if self._stop_flag:
+                self.error_signal.emit("任务已取消")
+            else:
+                self.done_signal.emit(annotated, results)
         except Exception as e:
-            self.error_signal.emit(str(e))
+            if not self._stop_flag:
+                self.error_signal.emit(str(e))
 
 
 class _InferenceWorker(QThread):
@@ -134,17 +182,14 @@ class _InferenceWorker(QThread):
         self._mutex.unlock()
 
     def stop(self) -> None:
+        """请求停止线程，不阻塞 UI 线程，不重置 _stop_flag。
+
+        线程真正退出后由 finished 信号触发清理。
+        若需同步等待（如 closeEvent），调用方应自行 wait()。
+        """
         self._mutex.lock()
         self._stop_flag = True
         self._cond.wakeOne()
-        self._mutex.unlock()
-        self.wait(5000)
-        if self.isRunning():
-            logger.warning("警告:_InferenceWorker 未在 5 秒内退出,可能仍在后台运行")
-        self._mutex.lock()
-        self._stop_flag = False
-        self._frame = None
-        self._busy = False
         self._mutex.unlock()
 
     def run(self) -> None:
@@ -178,8 +223,34 @@ class _InferenceWorker(QThread):
             self._mutex.unlock()
 
 
+class _ModelLoadWorker(QThread):
+    """后台加载模型，避免 ONNX warmup / CUDA 初始化阻塞 UI。"""
+    finished_signal = pyqtSignal(bool, str, dict)  # success, model_path, model_info
+
+    def __init__(self, predictor: YOLOPredictor, model_path: str, task: str = "") -> None:
+        super().__init__()
+        self._predictor = predictor
+        self._model_path = model_path
+        self._task = task
+
+    def run(self) -> None:
+        try:
+            success = self._predictor.load_model(self._model_path, task=self._task)
+            info = self._predictor.get_model_info() if success else {}
+            self.finished_signal.emit(success, self._model_path, info)
+        except Exception:
+            self.finished_signal.emit(False, self._model_path, {})
+
+
 class TestWidget(QWidget):
     model_loaded = pyqtSignal(object)
+
+    # 模型任务状态机
+    STATE_IDLE = "idle"
+    STATE_LOADING = "loading"
+    STATE_PREDICTING = "predicting"
+    STATE_VALIDATING = "validating"
+    STATE_EXPORTING = "exporting"
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -198,6 +269,10 @@ class TestWidget(QWidget):
         self._inference_worker.result_signal.connect(self._on_inference_result)
         self._last_frame: Optional[np.ndarray] = None
         self._image_predict_worker: Optional[_ImagePredictWorker] = None
+        self._model_load_worker: Optional[_ModelLoadWorker] = None
+        self._validate_worker: Optional[_ValidateWorker] = None
+        self._export_worker: Optional[_ExportWorker] = None
+        self._model_state: str = self.STATE_IDLE
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -287,6 +362,9 @@ class TestWidget(QWidget):
         self.load_model_btn = QPushButton("加载模型")
         self.load_model_btn.clicked.connect(self._on_load_model)
         model_form.addRow(self.load_model_btn)
+
+        self.model_state_label = QLabel("状态: 空闲")
+        model_form.addRow(self.model_state_label)
 
         input_group = QGroupBox("推理输入")
         input_group.setObjectName("configCard")
@@ -482,14 +560,42 @@ class TestWidget(QWidget):
         if path:
             self.model_path_edit.setText(path)
 
+    _STATE_TEXTS = {
+        "idle": "空闲",
+        "loading": "加载中",
+        "predicting": "推理中",
+        "validating": "验证中",
+        "exporting": "导出中",
+    }
+
+    def _set_model_state(self, state: str) -> None:
+        """更新模型任务状态并刷新 UI 标签。"""
+        self._model_state = state
+        text = self._STATE_TEXTS.get(state, state)
+        self.model_state_label.setText(f"状态: {text}")
+
+    def _check_model_busy(self) -> bool:
+        """检查是否有模型任务正在运行，弹窗提示并返回 True。"""
+        state_labels = {
+            self.STATE_LOADING: "模型加载中",
+            self.STATE_PREDICTING: "实时推理中，请先点击停止",
+            self.STATE_VALIDATING: "模型验证中",
+            self.STATE_EXPORTING: "模型导出中",
+        }
+        label = state_labels.get(self._model_state)
+        if label:
+            QMessageBox.warning(self, "提示", f"{label}，请等待完成后再操作")
+            return True
+        return False
+
     def _on_load_model(self) -> None:
         model_path = self.model_path_edit.text().strip()
         if not model_path:
             QMessageBox.warning(self, "验证失败", "请先输入或选择模型路径")
             return
-        self.load_model_btn.setEnabled(False)
-        self.load_model_btn.setText("加载中...")
-        # For ONNX files, try to infer or ask for task type
+        if self._check_model_busy():
+            return
+        # For ONNX files, try to infer or ask for task type (UI thread, 快速操作)
         task = ""
         if model_path.lower().endswith(".onnx"):
             task = self.predictor._guess_onnx_task(model_path)
@@ -509,9 +615,20 @@ class TestWidget(QWidget):
                     task = item
                 else:
                     task = "detect"
-        success = self.predictor.load_model(model_path, task=task)
+        # 后台线程加载模型，避免 ONNX warmup / CUDA 初始化阻塞 UI
+        self.load_model_btn.setEnabled(False)
+        self.load_model_btn.setText("加载中...")
+        self._set_model_state(self.STATE_LOADING)
+        self._model_load_worker = _ModelLoadWorker(self.predictor, model_path, task)
+        self._model_load_worker.finished_signal.connect(self._on_model_loaded)
+        self._model_load_worker.start()
+
+    def _on_model_loaded(self, success: bool, model_path: str, info: dict) -> None:
+        self.load_model_btn.setEnabled(True)
+        self.load_model_btn.setText("加载模型")
+        self._model_load_worker = None
+        self._set_model_state(self.STATE_IDLE)
         if success:
-            info = self.predictor.get_model_info()
             task = info.get("task", "unknown")
             names = info.get("class_names", [])
             ext = Path(model_path).suffix.lower()
@@ -530,8 +647,6 @@ class TestWidget(QWidget):
             QMessageBox.information(self, "成功", msg)
         else:
             QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
-        self.load_model_btn.setEnabled(True)
-        self.load_model_btn.setText("加载模型")
 
     def _on_select_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -585,10 +700,13 @@ class TestWidget(QWidget):
             self._show_batch_image()
 
     def _run_image_predict(self, path: str) -> None:
+        if self._check_model_busy():
+            return
         self.result_label.setText("推理中...")
         self.image_btn.setEnabled(False)
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
+        self._set_model_state(self.STATE_PREDICTING)
         adv_params = self._get_advanced_params()
         self._image_predict_worker = _ImagePredictWorker(
             self.predictor, path, self.conf_spin.value(), self.iou_spin.value(),
@@ -604,6 +722,7 @@ class TestWidget(QWidget):
         self.image_btn.setEnabled(True)
         self.prev_btn.setEnabled(True)
         self.next_btn.setEnabled(True)
+        self._set_model_state(self.STATE_IDLE)
         if annotated is not None and annotated.size > 0:
             self._display_np_image(annotated)
             count = 0
@@ -617,10 +736,6 @@ class TestWidget(QWidget):
                 self.fps_label.setText(f"图片: {self._batch_index + 1}/{len(self._batch_images)}")
             else:
                 self.fps_label.setText("FPS: -")
-            if self.predictor.is_onnx and count == 0:
-                diag = self.predictor.get_onnx_diag()
-                if diag:
-                    QMessageBox.warning(self, "ONNX 诊断", diag)
         else:
             QMessageBox.warning(self, "警告", "图片读取或推理失败")
 
@@ -628,6 +743,7 @@ class TestWidget(QWidget):
         self.image_btn.setEnabled(True)
         self.prev_btn.setEnabled(True)
         self.next_btn.setEnabled(True)
+        self._set_model_state(self.STATE_IDLE)
         QMessageBox.warning(self, "警告", f"图片推理出错:\n{msg}")
 
     def _on_select_video(self) -> None:
@@ -649,6 +765,8 @@ class TestWidget(QWidget):
         self._start_capture(0)
 
     def _start_capture(self, source: Union[str, int]) -> None:
+        if self._check_model_busy():
+            return
         self._on_stop()
         self._batch_images = []
         self._batch_index = 0
@@ -661,6 +779,7 @@ class TestWidget(QWidget):
             QMessageBox.warning(self, "警告", "无法打开视频源")
             self.cap = None
             return
+        self._set_model_state(self.STATE_PREDICTING)
         self.stop_btn.setEnabled(True)
         self.image_btn.setEnabled(False)
         self.video_btn.setEnabled(False)
@@ -688,6 +807,8 @@ class TestWidget(QWidget):
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
             return
+        if self._check_model_busy():
+            return
         self._on_stop()
         self._batch_images = []
         self._batch_index = 0
@@ -703,6 +824,7 @@ class TestWidget(QWidget):
         if not success:
             QMessageBox.warning(self, "警告", "无法打开 RealSense 设备")
             return
+        self._set_model_state(self.STATE_PREDICTING)
         self.stop_btn.setEnabled(True)
         self.image_btn.setEnabled(False)
         self.video_btn.setEnabled(False)
@@ -786,6 +908,9 @@ class TestWidget(QWidget):
             self.cap = None
         if self.rs_camera.running:
             self.rs_camera.stop()
+        # 仅当处于实时推理状态时才重置，避免覆盖 validate/export 状态
+        if self._model_state == self.STATE_PREDICTING:
+            self._set_model_state(self.STATE_IDLE)
         self.stop_btn.setEnabled(False)
         self.image_btn.setEnabled(True)
         self.video_btn.setEnabled(True)
@@ -798,13 +923,28 @@ class TestWidget(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._on_stop()
+        # 先请求所有工作线程协作停止，再同步等待退出
+        for worker in (self._validate_worker, self._export_worker, self._image_predict_worker):
+            if worker is not None:
+                worker.request_stop()
+        # closeEvent 中同步等待线程退出，防止析构时崩溃
         if self._inference_worker is not None and self._inference_worker.isRunning():
             self._inference_worker.wait(5000)
+        if self._model_load_worker is not None and self._model_load_worker.isRunning():
+            self._model_load_worker.wait(5000)
+        if self._validate_worker is not None and self._validate_worker.isRunning():
+            self._validate_worker.wait(5000)
+        if self._export_worker is not None and self._export_worker.isRunning():
+            self._export_worker.wait(5000)
+        if self._image_predict_worker is not None and self._image_predict_worker.isRunning():
+            self._image_predict_worker.wait(5000)
         super().closeEvent(event)
 
     def _on_validate(self) -> None:
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
+            return
+        if self._check_model_busy():
             return
         data_path = ""
         if self._project_config is not None:
@@ -817,16 +957,18 @@ class TestWidget(QWidget):
             return
         self.validate_btn.setEnabled(False)
         self.validate_btn.setText("验证中...")
+        self._set_model_state(self.STATE_VALIDATING)
         self._validate_worker = _ValidateWorker(self.predictor, data_path)
         self._validate_worker.done_signal.connect(self._on_validate_done)
         self._validate_worker.error_signal.connect(self._on_validate_error)
+        self._validate_worker.finished.connect(lambda: setattr(self, '_validate_worker', None))
         self._validate_worker.start()
         self._validate_worker.finished.connect(self._validate_worker.deleteLater)
-        self._validate_worker.finished.connect(lambda: setattr(self, '_validate_worker', None))
 
     def _on_validate_done(self, metrics: dict) -> None:
         self.validate_btn.setEnabled(True)
         self.validate_btn.setText("验证模型")
+        self._set_model_state(self.STATE_IDLE)
         if metrics:
             task = metrics.get("task", "detect")
             self.val_task_label.setText(f"任务类型: {task}")
@@ -878,11 +1020,14 @@ class TestWidget(QWidget):
     def _on_validate_error(self, msg: str) -> None:
         self.validate_btn.setEnabled(True)
         self.validate_btn.setText("验证模型")
+        self._set_model_state(self.STATE_IDLE)
         QMessageBox.warning(self, "警告", f"模型验证出错:\n{msg}")
 
     def _on_export_clicked(self) -> None:
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
+            return
+        if self._check_model_busy():
             return
         task = self.predictor.get_model_info().get("task", "")
         dlg = ExportDialog(task=task, parent=self)
@@ -898,6 +1043,7 @@ class TestWidget(QWidget):
             output_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not output_dir:
             return
+        self._set_model_state(self.STATE_EXPORTING)
         self._export_worker = _ExportWorker(self.predictor, fmt, output_dir, **kwargs)
         self._export_worker.done_signal.connect(self._on_export_done)
         self._export_worker.error_signal.connect(self._on_export_error)
@@ -906,6 +1052,7 @@ class TestWidget(QWidget):
         self._export_worker.finished.connect(lambda: setattr(self, '_export_worker', None))
 
     def _on_export_done(self, exported_path: str, success: bool, error_msg: str) -> None:
+        self._set_model_state(self.STATE_IDLE)
         dlg = getattr(self, '_export_dialog', None)
         if dlg is not None:
             dlg.accept()
@@ -965,6 +1112,7 @@ class TestWidget(QWidget):
             QMessageBox.critical(self, "错误", "模型导出失败")
 
     def _on_export_error(self, msg: str) -> None:
+        self._set_model_state(self.STATE_IDLE)
         dlg = getattr(self, '_export_dialog', None)
         if dlg is not None:
             dlg._confirm_btn.setEnabled(True)

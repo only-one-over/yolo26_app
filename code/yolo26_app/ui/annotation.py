@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -12,7 +12,6 @@ import numpy as np
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
 from PyQt6.QtGui import (
     QPixmap,
-    QImage,
     QIcon,
     QColor,
     QPainter,
@@ -31,7 +30,6 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QGroupBox,
     QPushButton,
-    QScrollArea,
     QFileDialog,
     QFrame,
     QInputDialog,
@@ -55,6 +53,9 @@ from yolo26_app.core.config import ClassItem, ProjectConfig
 from yolo26_app.core.label_manager import LabelManager
 from yolo26_app.core.logger import get_logger
 from yolo26_app.core.persistence import write_json_atomic
+
+if TYPE_CHECKING:
+    from yolo26_app.core.auto_annotator import SAMAnnotator
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui import styles
 
@@ -225,7 +226,6 @@ class _ModelDownloadWorker(QThread):
     def run(self) -> None:
         try:
             import urllib.request
-            import tempfile
             os.makedirs(os.path.dirname(self._save_path), exist_ok=True)
             tmp_path = self._save_path + ".tmp"
             urllib.request.urlretrieve(
@@ -1275,6 +1275,7 @@ class AnnotateWidget(QWidget):
         self._scene.clear()
         self._scene.setSceneRect(QRectF())
         self._save_annotations_to_project(force=True)
+        self._schedule_autosave()
 
     def _add_class(self) -> None:
         dialog = QDialog(self)
@@ -1415,17 +1416,13 @@ class AnnotateWidget(QWidget):
                 if not model_path:
                     return
                 config_path = "configs/sam2.1/sam2.1_hiera_s.yaml"
-                model_type = "sam2.1_hiera_s"
                 filename = os.path.basename(model_path).lower()
                 if "hiera_l" in filename or "hiera-large" in filename:
                     config_path = "configs/sam2.1/sam2.1_hiera_l.yaml"
-                    model_type = "sam2.1_hiera_l"
                 elif "hiera_b" in filename or "hiera-base" in filename:
                     config_path = "configs/sam2.1/sam2.1_hiera_b+.yaml"
-                    model_type = "sam2.1_hiera_b+"
                 elif "hiera_t" in filename or "hiera-tiny" in filename:
                     config_path = "configs/sam2.1/sam2.1_hiera_t.yaml"
-                    model_type = "sam2.1_hiera_t"
             window = self.window()
             if hasattr(window, "statusbar"):
                 window.statusbar.showMessage("SAM 2 正在加载模型...")

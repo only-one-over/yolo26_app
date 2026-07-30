@@ -249,7 +249,6 @@ class GroundingDINOAnnotator:
             return []
 
         try:
-            import torch
 
             image = cv2.imread(image_path)
             if image is None:

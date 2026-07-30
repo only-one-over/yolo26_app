@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from yolo26_app.core.config import ProjectConfig, TrainConfig, ClassItem
+from yolo26_app.core.config import ProjectConfig, TrainConfig
 
 RECENT_PROJECTS_DIR = Path.home() / ".yolo26_app"
 RECENT_PROJECTS_FILE = RECENT_PROJECTS_DIR / "recent_projects.json"
