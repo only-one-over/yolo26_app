@@ -60,7 +60,14 @@ jobs:
         run: >-
           python -c "from pathlib import Path; import tarfile; archive = next(Path('dist').glob('*.tar.gz')); names = tarfile.open(archive).getnames(); assert any(name.endswith('docs/README.md') for name in names); assert any(name.endswith('code/yolo26_app/core/config_template.yaml') for name in names); assert any(name.endswith('code/yolo26_app/ui/icons/nav-annotate.svg') for name in names)"
       - run: python -m venv .wheel-test-env
-      - run: .\.wheel-test-env\Scripts\python.exe -m pip install --no-deps --force-reinstall dist\*.whl
+      - name: Install the built wheel
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if ($null -eq $wheel) {
+            throw "No wheel distribution was built."
+          }
+          & .\.wheel-test-env\Scripts\python.exe -m pip install --no-deps --force-reinstall $wheel.FullName
       - name: Verify wheel resources and GUI entry point metadata
         run: >-
           .\.wheel-test-env\Scripts\python.exe -c "from importlib.metadata import entry_points; from importlib.resources import files; root = files('yolo26_app'); assert root.joinpath('core/config_template.yaml').is_file(); assert root.joinpath('ui/icons/nav-annotate.svg').is_file(); assert any(entry.name == 'yolo26-app' and entry.value == 'yolo26_app.app:main' for entry in entry_points(group='gui_scripts'))"
