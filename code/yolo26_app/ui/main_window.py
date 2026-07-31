@@ -99,6 +99,16 @@ class NewProjectDialog(QDialog):
     def get_project_name(self) -> str:
         return self.name_edit.text().strip()
 
+    def accept(self) -> None:
+        try:
+            name = ProjectManager.validate_project_name(self.name_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "项目名称无效", str(exc))
+            self.name_edit.setFocus()
+            return
+        self.name_edit.setText(name)
+        super().accept()
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -109,6 +119,7 @@ class MainWindow(QMainWindow):
         self.current_project_config: Optional[ProjectConfig] = None
         self._last_successful_workspace = ""
         self._gpu_detect_worker: Optional["GPUDetectWorker"] = None
+        self._env_check_worker = None
         self.annotate_widget: Optional["AnnotateWidget"] = None
         self.train_widget: Optional["TrainWidget"] = None
         self.test_widget: Optional["TestWidget"] = None
@@ -259,7 +270,7 @@ class MainWindow(QMainWindow):
             self.annotate_widget.state_changed.connect(self._on_annotation_state_changed)
             page = self.annotate_widget
             if self.test_widget is not None:
-                self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
+                self.test_widget.model_loaded.connect(self.annotate_widget.set_model_session)
         elif index == 1 and self.train_widget is None:
             from yolo26_app.ui.training import TrainWidget
 
@@ -278,7 +289,7 @@ class MainWindow(QMainWindow):
             self.test_widget = TestWidget()
             page = self.test_widget
             if self.annotate_widget is not None:
-                self.test_widget.model_loaded.connect(self.annotate_widget.set_yolo_model)
+                self.test_widget.model_loaded.connect(self.annotate_widget.set_model_session)
             if self.current_project_config is not None:
                 self.test_widget.set_project_config(self.current_project_config)
         if page is None:
@@ -420,11 +431,26 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._stop_all_tasks()
+            if self._has_running_tasks():
+                QMessageBox.warning(
+                    self,
+                    "任务仍在运行",
+                    "后台任务仍在停止中，请等待任务结束后再关闭应用。",
+                )
+                event.ignore()
+                return
 
         if self.annotate_widget is not None:
             self.annotate_widget.flush_autosave()
             # 停止标注页面的后台线程，避免 QThread 在 widget 销毁时仍在运行
-            self.annotate_widget.stop_background_threads()
+            if not self.annotate_widget.stop_background_threads():
+                QMessageBox.warning(
+                    self,
+                    "任务仍在运行",
+                    "标注后台任务尚未结束，请等待任务完成后再关闭应用。",
+                )
+                event.ignore()
+                return
         # 停止环境自检线程
         if hasattr(self, '_env_check_worker') and self._env_check_worker is not None:
             try:
@@ -456,26 +482,38 @@ class MainWindow(QMainWindow):
                 return True
         # 检查摄像头/RealSense
         if hasattr(self, 'test_widget') and self.test_widget is not None:
-            if hasattr(self.test_widget, 'timer') and self.test_widget.timer.isActive():
+            if self.test_widget.has_running_background_workers():
                 return True
-            if hasattr(self.test_widget, 'rs_camera') and self.test_widget.rs_camera.running:
+        if hasattr(self, "annotate_widget") and self.annotate_widget is not None:
+            if self.annotate_widget.has_running_background_workers():
                 return True
-            if hasattr(self.test_widget, '_inference_worker') and self.test_widget._inference_worker is not None:
-                if self.test_widget._inference_worker.isRunning():
-                    return True
+        for attribute in ("_env_check_worker", "_gpu_detect_worker"):
+            worker = getattr(self, attribute, None)
+            if worker is not None:
+                try:
+                    if worker.isRunning():
+                        return True
+                except RuntimeError:
+                    continue
         return False
 
     def _stop_all_tasks(self) -> None:
-        """停止所有后台任务"""
-        if hasattr(self, 'train_widget') and self.train_widget is not None:
+        """Request all background tasks to stop without blocking the UI."""
+        if hasattr(self, "train_widget") and self.train_widget is not None:
             if self.train_widget._trainer and self.train_widget._trainer.isRunning():
                 self.train_widget._trainer.stop()
-                self.train_widget._trainer.wait(30000)
-                if self.train_widget._trainer.isRunning():
-                    QMessageBox.warning(self, "警告", "训练仍在运行,强制退出可能丢失数据")
-        if hasattr(self, 'test_widget') and self.test_widget is not None:
-            if hasattr(self.test_widget, '_on_stop'):
-                self.test_widget._on_stop()
+        if hasattr(self, "test_widget") and self.test_widget is not None:
+            self.test_widget.request_stop_background_workers()
+        if hasattr(self, "annotate_widget") and self.annotate_widget is not None:
+            self.annotate_widget.request_stop_background_workers()
+        for attribute in ("_env_check_worker", "_gpu_detect_worker"):
+            worker = getattr(self, attribute, None)
+            if worker is not None:
+                try:
+                    if worker.isRunning():
+                        worker.requestInterruption()
+                except RuntimeError:
+                    continue
 
     def _save_app_state(self) -> None:
         is_maximized = self.isMaximized()
@@ -1012,7 +1050,14 @@ class MainWindow(QMainWindow):
             )
             QMessageBox.warning(self, "环境问题检测", combined)
 
-        self._env_check_worker = _EnvCheckWorker(parent=None)
-        self._env_check_worker.issues_ready.connect(_on_env_issues_ready)
-        self._env_check_worker.finished.connect(self._env_check_worker.deleteLater)
-        self._env_check_worker.start()
+        worker = _EnvCheckWorker(parent=None)
+        worker.issues_ready.connect(_on_env_issues_ready)
+        worker.finished.connect(worker.deleteLater)
+
+        def _clear_env_worker(_worker=worker) -> None:
+            if self._env_check_worker is _worker:
+                self._env_check_worker = None
+
+        worker.finished.connect(_clear_env_worker)
+        self._env_check_worker = worker
+        worker.start()

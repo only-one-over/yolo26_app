@@ -66,9 +66,9 @@ CODE_WIKI.md
 
 # Logs
 *.log
+logs/
 
 # Graphify temp files
 .graphify_*.json
 _graphify_*.py
 graphify-out/
-

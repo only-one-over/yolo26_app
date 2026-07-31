@@ -9,13 +9,62 @@ RECENT_PROJECTS_DIR = Path.home() / ".yolo26_app"
 RECENT_PROJECTS_FILE = RECENT_PROJECTS_DIR / "recent_projects.json"
 CONFIG_FILENAME = "project_config.json"
 CLASSES_FILENAME = "classes.txt"
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_INVALID_PROJECT_NAME_CHARS = set('<>:"/\\|?*')
 
 
 class ProjectManager:
     @staticmethod
+    def validate_project_name(name: str) -> str:
+        """Validate a project directory name and return its normalized value."""
+        if not isinstance(name, str):
+            raise ValueError("项目名称必须是字符串")
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("项目名称不能为空")
+        if normalized != name:
+            raise ValueError("项目名称不能以空格开头或结尾")
+        if normalized in {".", ".."}:
+            raise ValueError("项目名称不能是 . 或 ..")
+        if len(normalized) > 128:
+            raise ValueError("项目名称不能超过 128 个字符")
+        if normalized.endswith((".", " ")):
+            raise ValueError("项目名称不能以句点或空格结尾")
+        if any(ord(char) < 32 or char in _INVALID_PROJECT_NAME_CHARS for char in normalized):
+            raise ValueError('项目名称不能包含 <>:"/\\|?* 或控制字符')
+        if Path(normalized).is_absolute():
+            raise ValueError("项目名称不能是绝对路径")
+        reserved_stem = normalized.split(".", 1)[0].upper()
+        if reserved_stem in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"项目名称不能使用 Windows 保留名称: {reserved_stem}")
+        return normalized
+
+    @staticmethod
+    def resolve_project_path(name: str, path: str) -> Path:
+        """Resolve a project path while guaranteeing it remains below its root."""
+        normalized = ProjectManager.validate_project_name(name)
+        root = Path(path).expanduser().resolve()
+        project_path = (root / normalized).resolve()
+        try:
+            project_path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("项目路径超出允许的项目根目录") from exc
+        return project_path
+
+    @staticmethod
     def create_project(name: str, path: str) -> ProjectConfig:
-        project_path = Path(path) / name
-        project_path.mkdir(parents=True, exist_ok=True)
+        name = ProjectManager.validate_project_name(name)
+        project_path = ProjectManager.resolve_project_path(name, path)
+        if project_path.exists():
+            raise FileExistsError(f"项目已存在: {project_path}")
+        project_path.mkdir(parents=True)
 
         (project_path / "datasets").mkdir(exist_ok=True)
         (project_path / "models").mkdir(exist_ok=True)

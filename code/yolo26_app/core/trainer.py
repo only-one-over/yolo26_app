@@ -20,6 +20,11 @@ class YOLOTrainer(QThread):
         self.project_path = project_path
         self._stop_flag = False
 
+    def _on_train_start(self, trainer) -> None:
+        save_dir = getattr(trainer, "save_dir", None)
+        if save_dir is not None:
+            self.save_dir_signal.emit(str(save_dir))
+
     def _on_train_epoch_end(self, trainer) -> None:
         if self._stop_flag:
             trainer.stop_training = True
@@ -120,6 +125,7 @@ class YOLOTrainer(QThread):
             logger = logging.getLogger("ultralytics")
             logger.addHandler(handler)
 
+            model.add_callback("on_train_start", self._on_train_start)
             model.add_callback("on_train_epoch_end", self._on_train_epoch_end)
             model.add_callback("on_train_batch_end", self._on_train_batch_end)
 

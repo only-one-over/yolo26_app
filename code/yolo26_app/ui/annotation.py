@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shutil
 import tempfile
@@ -12,6 +13,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
 from PyQt6.QtGui import (
     QPixmap,
+    QImage,
     QIcon,
     QColor,
     QPainter,
@@ -64,6 +66,10 @@ logger = get_logger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"}
+DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
+MAX_MEDIA_IMPORT_FILES = 50_000
+MAX_VIDEO_FRAMES_PER_FILE = 10_000
+MAX_MODEL_DOWNLOAD_BYTES = 1_100_000_000
 
 
 class _FlipIdxDialog(QDialog):
@@ -211,42 +217,98 @@ class _SamWorker(QThread):
 
 class _ModelDownloadWorker(QThread):
     progress = pyqtSignal(int)
-    finished = pyqtSignal(str)
+    completed = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, url: str, save_path: str, parent=None):
+    _ALLOWED_HOSTS = {"dl.fbaipublicfiles.com"}
+
+    def __init__(
+        self,
+        url: str,
+        save_path: str,
+        expected_sha256: str,
+        parent=None,
+        max_bytes: int = MAX_MODEL_DOWNLOAD_BYTES,
+        timeout_seconds: float = 30.0,
+    ):
         super().__init__(parent)
         self._url = url
         self._save_path = save_path
+        self._expected_sha256 = expected_sha256.lower()
+        self._max_bytes = max_bytes
+        self._timeout_seconds = timeout_seconds
         self._stop_flag = False
 
     def stop(self) -> None:
         self._stop_flag = True
 
     def run(self) -> None:
+        tmp_path = self._save_path + ".tmp"
         try:
             import urllib.request
-            os.makedirs(os.path.dirname(self._save_path), exist_ok=True)
-            tmp_path = self._save_path + ".tmp"
-            urllib.request.urlretrieve(
-                self._url, tmp_path,
-                reporthook=self._download_hook
+
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self._url)
+            if parsed.scheme != "https" or parsed.hostname not in self._ALLOWED_HOSTS:
+                raise ValueError("仅允许从受信任的 Meta HTTPS 地址下载 SAM2 模型")
+            if len(self._expected_sha256) != 64:
+                raise ValueError("缺少有效的 SAM2 模型 SHA-256 校验值")
+
+            save_dir = os.path.dirname(self._save_path) or os.getcwd()
+            os.makedirs(save_dir, exist_ok=True)
+            request = urllib.request.Request(
+                self._url,
+                headers={"User-Agent": "YOLO26-App/1.0"},
             )
-            if not self._stop_flag:
-                os.rename(tmp_path, self._save_path)
-                self.finished.emit(self._save_path)
-            else:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+            hasher = hashlib.sha256()
+            downloaded = 0
+
+            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
+                final_url = urlparse(response.geturl())
+                if final_url.scheme != "https" or final_url.hostname not in self._ALLOWED_HOSTS:
+                    raise ValueError("模型下载被重定向到未受信任的地址")
+                try:
+                    total_size = int(response.headers.get("Content-Length", "0"))
+                except (TypeError, ValueError):
+                    total_size = 0
+                if total_size > self._max_bytes:
+                    raise ValueError("模型文件超过允许的最大大小")
+
+                with open(tmp_path, "wb") as output:
+                    while True:
+                        if self._stop_flag:
+                            raise RuntimeError("下载已取消")
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        downloaded += len(chunk)
+                        if downloaded > self._max_bytes:
+                            raise ValueError("模型文件超过允许的最大大小")
+                        output.write(chunk)
+                        hasher.update(chunk)
+                        if total_size > 0:
+                            self.progress.emit(min(int(downloaded / total_size * 100), 99))
+
+            actual_sha256 = hasher.hexdigest()
+            if actual_sha256 != self._expected_sha256:
+                raise ValueError(
+                    "SAM2 模型完整性校验失败，下载文件可能损坏或被替换"
+                )
+            if self._stop_flag:
+                raise RuntimeError("下载已取消")
+
+            os.replace(tmp_path, self._save_path)
+            self.progress.emit(100)
+            self.completed.emit(self._save_path)
         except Exception as e:
             self.error.emit(str(e))
-
-    def _download_hook(self, block_num: int, block_size: int, total_size: int) -> None:
-        if self._stop_flag:
-            raise Exception("Download cancelled")
-        if total_size > 0:
-            progress = int(block_num * block_size / total_size * 100)
-            self.progress.emit(min(progress, 100))
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    logger.warning("无法清理模型下载临时文件: %s", tmp_path)
 
 
 class _BatchDetectWorker(QThread):
@@ -315,9 +377,7 @@ class _YoloSamBatchWorker(QThread):
                         logger.warning(f"YOLO+SAM2 批量:图片读取失败,跳过 {img_path}")
                         continue
                     # YOLO 预测
-                    predict_kwargs = dict(source=image, conf=self._conf, verbose=False)
-                    model = self._yolo_annotator._model
-                    results = model.predict(**predict_kwargs)
+                    results = self._yolo_annotator.predict_results(image, conf=self._conf)
                     if not results:
                         continue
                     result = results[0]
@@ -402,7 +462,7 @@ class _DinoWorker(QThread):
 
 
 class _ThumbnailWorker(QThread):
-    thumbnail_ready = pyqtSignal(int, QPixmap)
+    thumbnail_ready = pyqtSignal(int, object)
 
     def __init__(self, items: list, parent=None):
         super().__init__(parent)
@@ -423,8 +483,231 @@ class _ThumbnailWorker(QThread):
                 reader.setScaledSize(QSize(64, 64))
                 img = reader.read()
                 if not img.isNull():
-                    pixmap = QPixmap.fromImage(img)
-                    self.thumbnail_ready.emit(row, pixmap)
+                    self.thumbnail_ready.emit(row, img)
+
+
+class _ImageLoadWorker(QThread):
+    image_ready = pyqtSignal(str, object)
+    error_signal = pyqtSignal(str, str)
+
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self._image_path = image_path
+
+    def stop(self) -> None:
+        self.requestInterruption()
+
+    def run(self) -> None:
+        from PyQt6.QtGui import QImageReader
+
+        if self.isInterruptionRequested():
+            return
+        reader = QImageReader(self._image_path)
+        if not reader.canRead():
+            self.error_signal.emit(self._image_path, reader.errorString())
+            return
+        image = reader.read()
+        if self.isInterruptionRequested():
+            return
+        if image.isNull():
+            self.error_signal.emit(self._image_path, reader.errorString())
+            return
+        self.image_ready.emit(self._image_path, image)
+
+
+class _MediaImportWorker(QThread):
+    progress_signal = pyqtSignal(int, int, str)
+    done_signal = pyqtSignal(object, object, int, object, bool)
+    error_signal = pyqtSignal(str)
+
+    def __init__(
+        self,
+        image_paths: Optional[List[str]] = None,
+        video_paths: Optional[List[str]] = None,
+        directory_path: str = "",
+        output_dir: Optional[str] = None,
+        video_output_dir: Optional[str] = None,
+        frame_interval_seconds: float = DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._image_paths = list(image_paths or [])
+        self._video_paths = list(video_paths or [])
+        self._directory_path = directory_path
+        self._output_dir = Path(output_dir) if output_dir else None
+        self._video_output_dir = (
+            Path(video_output_dir) if video_output_dir else self._output_dir
+        )
+        self._frame_interval_seconds = max(0.1, frame_interval_seconds)
+        self._stop_flag = False
+
+    def stop(self) -> None:
+        self._stop_flag = True
+
+    def run(self) -> None:
+        try:
+            image_paths = self._image_paths
+            video_paths = self._video_paths
+            if self._directory_path:
+                image_paths, video_paths = self._scan_directory(self._directory_path)
+
+            total_files = len(image_paths) + len(video_paths)
+            if total_files > MAX_MEDIA_IMPORT_FILES:
+                raise ValueError(
+                    f"目录包含 {total_files} 个媒体文件，超过单次导入上限 "
+                    f"{MAX_MEDIA_IMPORT_FILES}"
+                )
+
+            imported_images: List[str] = []
+            extracted_frames: List[str] = []
+            failed_items: List[str] = []
+            imported_videos = 0
+            processed = 0
+
+            for source_path in image_paths:
+                if self._stop_flag:
+                    break
+                try:
+                    imported_images.append(self._store_image(source_path))
+                except Exception as exc:
+                    failed_items.append(f"{os.path.basename(source_path)}: {exc}")
+                processed += 1
+                self.progress_signal.emit(
+                    processed,
+                    total_files,
+                    f"正在导入图片 {processed}/{total_files}",
+                )
+
+            for video_path in video_paths:
+                if self._stop_flag:
+                    break
+                try:
+                    frames, limit_reached = self._extract_video(video_path)
+                    if frames:
+                        imported_videos += 1
+                        extracted_frames.extend(frames)
+                        if limit_reached:
+                            failed_items.append(
+                                f"{os.path.basename(video_path)}: 已达到每个视频最多 "
+                                f"{MAX_VIDEO_FRAMES_PER_FILE} 张抽帧上限"
+                            )
+                    else:
+                        failed_items.append(os.path.basename(video_path))
+                except Exception as exc:
+                    failed_items.append(f"{os.path.basename(video_path)}: {exc}")
+                processed += 1
+                self.progress_signal.emit(
+                    processed,
+                    total_files,
+                    f"正在处理视频 {processed}/{total_files}",
+                )
+
+            self.done_signal.emit(
+                imported_images,
+                extracted_frames,
+                imported_videos,
+                failed_items,
+                self._stop_flag,
+            )
+        except Exception as exc:
+            self.error_signal.emit(str(exc))
+
+    @staticmethod
+    def _scan_directory(directory_path: str) -> tuple[List[str], List[str]]:
+        image_paths: List[str] = []
+        video_paths: List[str] = []
+        for root, dirs, files in os.walk(directory_path):
+            dirs.sort()
+            for filename in sorted(files):
+                path = os.path.join(root, filename)
+                extension = Path(filename).suffix.lower()
+                if extension in IMAGE_EXTENSIONS:
+                    image_paths.append(path)
+                elif extension in VIDEO_EXTENSIONS:
+                    video_paths.append(path)
+                if len(image_paths) + len(video_paths) > MAX_MEDIA_IMPORT_FILES:
+                    raise ValueError(
+                        f"目录媒体文件数量超过单次导入上限 {MAX_MEDIA_IMPORT_FILES}"
+                    )
+        image_paths.sort(key=str.lower)
+        video_paths.sort(key=str.lower)
+        return image_paths, video_paths
+
+    def _store_image(self, source_path: str) -> str:
+        source = Path(source_path)
+        if not source.is_file():
+            raise FileNotFoundError("文件不存在")
+        if self._output_dir is None:
+            return str(source.resolve())
+
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        if source.resolve().parent == self._output_dir.resolve():
+            return str(source.resolve())
+
+        destination = self._unique_path(self._output_dir, source.stem, source.suffix)
+        shutil.copy2(source, destination)
+        return str(destination.resolve())
+
+    def _extract_video(self, video_path: str) -> tuple[List[str], bool]:
+        if self._video_output_dir is None:
+            raise RuntimeError("视频抽帧目录不可用")
+        self._video_output_dir.mkdir(parents=True, exist_ok=True)
+
+        capture = cv2.VideoCapture(video_path)
+        if not capture.isOpened():
+            capture.release()
+            return [], False
+
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30.0
+        interval = max(1, int(round(fps * self._frame_interval_seconds)))
+        frame_index = 0
+        saved_index = 0
+        frame_paths: List[str] = []
+        limit_reached = False
+        safe_stem = self._safe_stem(Path(video_path).stem)
+
+        try:
+            while not self._stop_flag:
+                success, frame = capture.read()
+                if not success:
+                    break
+                if frame_index % interval == 0:
+                    if saved_index >= MAX_VIDEO_FRAMES_PER_FILE:
+                        limit_reached = True
+                        break
+                    destination = self._unique_path(
+                        self._video_output_dir,
+                        f"{safe_stem}_frame_{saved_index:06d}",
+                        ".jpg",
+                    )
+                    encoded, buffer = cv2.imencode(".jpg", frame)
+                    if encoded:
+                        buffer.tofile(str(destination))
+                        frame_paths.append(str(destination.resolve()))
+                        saved_index += 1
+                frame_index += 1
+        finally:
+            capture.release()
+
+        return frame_paths, limit_reached
+
+    @staticmethod
+    def _safe_stem(stem: str) -> str:
+        safe_stem = "".join(
+            char if char.isalnum() or char in "-_." else "_" for char in stem
+        ).strip("._")
+        return safe_stem or "video"
+
+    @staticmethod
+    def _unique_path(directory: Path, stem: str, suffix: str) -> Path:
+        candidate = directory / f"{stem}{suffix}"
+        counter = 1
+        while candidate.exists():
+            candidate = directory / f"{stem}_{counter}{suffix}"
+            counter += 1
+        return candidate
 
 
 class AnnotateWidget(QWidget):
@@ -443,11 +726,17 @@ class AnnotateWidget(QWidget):
         self._sam_instructions_shown = False
         self._sam_encoding = False
         self._sam_worker = None
+        self._pending_sam_image_path = ""
         self._batch_worker = None
         self._yolo_sam_worker: Optional[_YoloSamBatchWorker] = None
         self._batch_progress = None
         self._dino_worker = None
         self._thumb_worker: Optional[_ThumbnailWorker] = None
+        self._thumbnail_reload_pending = False
+        self._image_load_worker: Optional[_ImageLoadWorker] = None
+        self._pending_image_path = ""
+        self._media_import_worker: Optional[_MediaImportWorker] = None
+        self._media_import_progress: Optional[QProgressDialog] = None
         self._current_pixmap_item = None
         self._download_worker = None
         self._autosave_timer = QTimer(self)
@@ -480,13 +769,8 @@ class AnnotateWidget(QWidget):
         if self._sam_annotator is None or self._sam_annotator._predictor is None:
             return
         if self._sam_worker is not None and self._sam_worker.isRunning():
-            self._sam_worker.wait(5000)
-            if self._sam_worker.isRunning():
-                try:
-                    self._sam_worker.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-                logger.warning("警告: SAM encode worker 5 秒内未退出,已断开信号连接")
+            self._pending_sam_image_path = image_path
+            return
         import cv2
         image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
@@ -496,12 +780,13 @@ class AnnotateWidget(QWidget):
         window = self.window()
         if hasattr(window, "statusbar"):
             window.statusbar.showMessage("SAM 2 正在编码图像...")
-        self._sam_worker = _SamWorker(self._sam_annotator._predictor, task="encode", image=image)
-        self._sam_worker.encoding_done.connect(self._on_sam_encode_done)
-        self._sam_worker.error_occurred.connect(self._on_sam_error)
-        self._sam_worker.start()
-        self._sam_worker.finished.connect(self._sam_worker.deleteLater)
-        self._sam_worker.finished.connect(lambda: setattr(self, '_sam_worker', None))
+        worker = _SamWorker(self._sam_annotator._predictor, task="encode", image=image)
+        worker.encoding_done.connect(self._on_sam_encode_done)
+        worker.error_occurred.connect(self._on_sam_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._on_sam_worker_finished(_worker))
+        self._sam_worker = worker
+        worker.start()
 
     def _sam_predict_async(self) -> None:
         if self._sam_annotator is None or self._sam_annotator._predictor is None:
@@ -518,24 +803,27 @@ class AnnotateWidget(QWidget):
         if hasattr(window, "statusbar"):
             window.statusbar.showMessage("SAM 2 正在预测...")
         if self._sam_worker is not None and self._sam_worker.isRunning():
-            self._sam_worker.wait(5000)
-            if self._sam_worker.isRunning():
-                try:
-                    self._sam_worker.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-                logger.warning("警告: SAM predict worker 5 秒内未退出,已断开信号连接")
-        self._sam_worker = _SamWorker(
+            return
+        worker = _SamWorker(
             self._sam_annotator._predictor,
             task="predict",
             points=points_np,
             labels=labels_np,
         )
-        self._sam_worker.prediction_done.connect(self._on_sam_predict_done)
-        self._sam_worker.error_occurred.connect(self._on_sam_error)
-        self._sam_worker.start()
-        self._sam_worker.finished.connect(self._sam_worker.deleteLater)
-        self._sam_worker.finished.connect(lambda: setattr(self, '_sam_worker', None))
+        worker.prediction_done.connect(self._on_sam_predict_done)
+        worker.error_occurred.connect(self._on_sam_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._on_sam_worker_finished(_worker))
+        self._sam_worker = worker
+        worker.start()
+
+    def _on_sam_worker_finished(self, worker: _SamWorker) -> None:
+        if self._sam_worker is worker:
+            self._sam_worker = None
+        pending_path = self._pending_sam_image_path
+        self._pending_sam_image_path = ""
+        if pending_path and pending_path == self._current_image_path:
+            QTimer.singleShot(0, lambda path=pending_path: self._sam_set_image_async(path))
 
     def _on_sam_encode_done(self) -> None:
         self._sam_encoding = False
@@ -790,38 +1078,48 @@ class AnnotateWidget(QWidget):
         self._save_current_annotations()
         self._save_annotations_to_project()
 
-    def stop_background_threads(self) -> None:
-        """停止所有后台线程（缩略图、SAM、批量检测等），用于窗口关闭前清理。
+    def _background_workers(self) -> List[QThread]:
+        workers = [
+            self._thumb_worker,
+            self._image_load_worker,
+            self._media_import_worker,
+            self._sam_worker,
+            self._batch_worker,
+            self._yolo_sam_worker,
+            self._dino_worker,
+            self._download_worker,
+        ]
+        return [worker for worker in workers if worker is not None]
 
-        先对所有 worker 发出停止信号，再并行等待，避免串行等待导致的超时叠加。
-        """
-        self._stop_thumb_worker()
-        # 收集所有需要停止的 worker
-        workers = []
-        if self._sam_worker is not None:
-            workers.append(("SAM", self._sam_worker))
-        if self._batch_worker is not None:
-            self._batch_worker.stop()
-            workers.append(("批量检测", self._batch_worker))
-        if self._yolo_sam_worker is not None:
-            self._yolo_sam_worker.stop()
-            workers.append(("YOLO+SAM2", self._yolo_sam_worker))
-        # 并行等待：先对所有 worker 发出 stop，再统一等待
-        for name, w in workers:
+    def request_stop_background_workers(self) -> None:
+        """Request every annotation worker to stop without dropping live references."""
+        self._pending_image_path = ""
+        self._pending_sam_image_path = ""
+        self._thumbnail_reload_pending = False
+        for worker in self._background_workers():
             try:
-                if w.isRunning():
-                    w.wait(3000)
-                    if w.isRunning():
-                        try:
-                            w.disconnect()
-                        except (RuntimeError, TypeError):
-                            pass
-                        logger.warning("警告: %s worker 3 秒内未退出,已断开信号连接", name)
+                stop = getattr(worker, "stop", None)
+                if callable(stop):
+                    stop()
+                else:
+                    worker.requestInterruption()
             except RuntimeError:
                 pass
-        self._sam_worker = None
-        self._batch_worker = None
-        self._yolo_sam_worker = None
+
+    def has_running_background_workers(self) -> bool:
+        """Return True while any annotation worker is still executing."""
+        for worker in self._background_workers():
+            try:
+                if worker.isRunning():
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def stop_background_threads(self) -> bool:
+        """Compatibility wrapper used during close; never destroys a running worker."""
+        self.request_stop_background_workers()
+        return not self.has_running_background_workers()
 
     def _go_to_next_image(self) -> None:
         if QApplication.activeModalWidget() is not None:
@@ -938,33 +1236,23 @@ class AnnotateWidget(QWidget):
         )
         if not files:
             return
-        added = self._import_image_files(files)
-        if added:
-            self._finish_media_import()
+        self._start_media_import(image_paths=files)
 
     def _import_directory(self) -> None:
         dir_path = QFileDialog.getExistingDirectory(self, "选择媒体目录", self._get_import_start_dir())
         if not dir_path:
             return
 
-        image_files, video_files = self._scan_media_directory(dir_path)
-        if not image_files and not video_files:
-            QMessageBox.warning(self, "提示", "目录中未找到支持的图片或视频文件")
+        frame_interval = self._ask_video_frame_interval(
+            "目录中的视频将按此间隔抽帧；若目录不含视频，此设置会被忽略。"
+        )
+        if frame_interval is None:
             return
-
-        added_images = self._import_image_files(image_files)
-        imported_videos, extracted_frames, failed_videos = self._import_video_files(video_files)
-        if added_images or extracted_frames:
-            self._finish_media_import(select_first_if_empty=True)
-
-        summary = f"图片 {added_images} 张，视频 {imported_videos} 个，抽帧 {extracted_frames} 张"
-        if failed_videos:
-            summary += "\n以下视频无法打开或没有有效帧，已跳过：\n" + "\n".join(failed_videos[:10])
-            if len(failed_videos) > 10:
-                summary += f"\n... 另有 {len(failed_videos) - 10} 个"
-            QMessageBox.warning(self, "导入完成", summary)
-        else:
-            QMessageBox.information(self, "导入完成", summary)
+        self._start_media_import(
+            directory_path=dir_path,
+            frame_interval_seconds=frame_interval,
+            select_first_if_empty=True,
+        )
 
     def _import_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -973,15 +1261,140 @@ class AnnotateWidget(QWidget):
         if not path:
             return
 
-        _imported_videos, extracted_frames, failed_videos = self._import_video_files([path])
-        if extracted_frames:
-            self._finish_media_import()
-        if failed_videos:
-            QMessageBox.warning(
-                self,
-                "导入视频失败",
-                "视频无法打开或没有有效帧，已跳过：\n" + "\n".join(failed_videos),
+        frame_interval = self._ask_video_frame_interval()
+        if frame_interval is None:
+            return
+        self._start_media_import(
+            video_paths=[path],
+            frame_interval_seconds=frame_interval,
+        )
+
+    def _ask_video_frame_interval(self, note: str = "") -> Optional[float]:
+        prompt = "抽帧间隔（秒）:"
+        if note:
+            prompt = f"{note}\n\n{prompt}"
+        value, accepted = QInputDialog.getDouble(
+            self,
+            "视频抽帧设置",
+            prompt,
+            DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
+            0.1,
+            60.0,
+            1,
+        )
+        return value if accepted else None
+
+    def _start_media_import(
+        self,
+        image_paths: Optional[List[str]] = None,
+        video_paths: Optional[List[str]] = None,
+        directory_path: str = "",
+        frame_interval_seconds: float = DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS,
+        select_first_if_empty: bool = False,
+    ) -> None:
+        if self._media_import_worker is not None:
+            try:
+                if self._media_import_worker.isRunning():
+                    QMessageBox.information(self, "导入进行中", "请等待当前媒体导入任务完成")
+                    return
+            except RuntimeError:
+                self._media_import_worker = None
+
+        config = self._current_project_config()
+        output_dir: Optional[str] = None
+        if config is not None:
+            project_images_dir = ProjectManager.get_images_dir(config)
+            project_images_dir.mkdir(parents=True, exist_ok=True)
+            output_dir = str(project_images_dir)
+            video_output_dir = output_dir
+        else:
+            video_output_dir = tempfile.mkdtemp(prefix="yolo26_frames_")
+
+        progress = QProgressDialog("正在准备媒体导入...", "取消", 0, 0, self)
+        progress.setWindowTitle("导入媒体")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        self._media_import_progress = progress
+
+        worker = _MediaImportWorker(
+            image_paths=image_paths,
+            video_paths=video_paths,
+            directory_path=directory_path,
+            output_dir=output_dir,
+            video_output_dir=video_output_dir,
+            frame_interval_seconds=frame_interval_seconds,
+            parent=None,
+        )
+        worker.progress_signal.connect(self._on_media_import_progress)
+        worker.done_signal.connect(
+            lambda images, frames, videos, failed, cancelled: self._on_media_import_done(
+                images,
+                frames,
+                videos,
+                failed,
+                cancelled,
+                select_first_if_empty,
             )
+        )
+        worker.error_signal.connect(self._on_media_import_error)
+        progress.canceled.connect(worker.stop)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._on_media_import_finished(_worker))
+        self._media_import_worker = worker
+        worker.start()
+
+    def _on_media_import_progress(self, current: int, total: int, message: str) -> None:
+        progress = self._media_import_progress
+        if progress is None:
+            return
+        progress.setRange(0, max(total, 1))
+        progress.setValue(current)
+        progress.setLabelText(message)
+
+    def _on_media_import_done(
+        self,
+        image_paths: List[str],
+        frame_paths: List[str],
+        imported_videos: int,
+        failed_items: List[str],
+        cancelled: bool,
+        select_first_if_empty: bool,
+    ) -> None:
+        if self._media_import_progress is not None:
+            self._media_import_progress.close()
+            self._media_import_progress = None
+
+        added_images = sum(self._add_imported_image(path) for path in image_paths)
+        extracted_frames = sum(self._add_imported_image(path) for path in frame_paths)
+        if added_images or extracted_frames:
+            self._finish_media_import(select_first_if_empty=select_first_if_empty)
+
+        if not image_paths and not frame_paths and not failed_items and not cancelled:
+            QMessageBox.warning(self, "提示", "目录中未找到支持的图片或视频文件")
+            return
+
+        prefix = "导入已取消，已保留完成部分。\n" if cancelled else ""
+        summary = (
+            f"{prefix}图片 {added_images} 张，视频 {imported_videos} 个，"
+            f"抽帧 {extracted_frames} 张"
+        )
+        if failed_items:
+            summary += "\n以下媒体未完整导入：\n" + "\n".join(failed_items[:10])
+            if len(failed_items) > 10:
+                summary += f"\n... 另有 {len(failed_items) - 10} 个"
+            QMessageBox.warning(self, "导入完成", summary)
+        else:
+            QMessageBox.information(self, "导入完成", summary)
+
+    def _on_media_import_error(self, message: str) -> None:
+        if self._media_import_progress is not None:
+            self._media_import_progress.close()
+            self._media_import_progress = None
+        QMessageBox.warning(self, "导入失败", message)
+
+    def _on_media_import_finished(self, worker: _MediaImportWorker) -> None:
+        if self._media_import_worker is worker:
+            self._media_import_worker = None
 
     def _scan_media_directory(self, dir_path: str) -> tuple[List[str], List[str]]:
         image_files: List[str] = []
@@ -1146,21 +1559,18 @@ class AnnotateWidget(QWidget):
         self._image_list_widget.addItem(item)
 
     def _stop_thumb_worker(self) -> None:
-        """停止当前缩略图 worker 并完整等待其退出。
-
-        多图场景下旧 worker 可能仍在处理大图，必须等待 run() 自然退出，
-        否则后续覆盖引用会导致 QThread 被提前销毁。
-        """
+        """Request the current thumbnail worker to stop without blocking the UI."""
+        self._thumbnail_reload_pending = False
         worker = self._thumb_worker
-        self._thumb_worker = None
         if worker is None:
             return
         try:
             worker.stop()
-            if worker.isRunning():
-                worker.wait(3000)
+            if not worker.isRunning() and self._thumb_worker is worker:
+                self._thumb_worker = None
         except RuntimeError:
-            pass
+            if self._thumb_worker is worker:
+                self._thumb_worker = None
 
     def _start_thumbnail_loading(self) -> None:
         items = []
@@ -1172,8 +1582,16 @@ class AnnotateWidget(QWidget):
             self._stop_thumb_worker()
             return
 
-        # 先完整停止旧 worker，避免多个线程并发运行
-        self._stop_thumb_worker()
+        old_worker = self._thumb_worker
+        if old_worker is not None:
+            try:
+                if old_worker.isRunning():
+                    self._thumbnail_reload_pending = True
+                    old_worker.stop()
+                    return
+            except RuntimeError:
+                pass
+            self._thumb_worker = None
 
         # parent=None，避免 widget 销毁时 Qt 自动销毁仍在运行的线程
         worker = _ThumbnailWorker(items, None)
@@ -1183,14 +1601,17 @@ class AnnotateWidget(QWidget):
         def _on_finished(_w=worker):
             if self._thumb_worker is _w:
                 self._thumb_worker = None
+            if self._thumbnail_reload_pending:
+                self._thumbnail_reload_pending = False
+                QTimer.singleShot(0, self._start_thumbnail_loading)
         worker.finished.connect(_on_finished)
         self._thumb_worker = worker
         worker.start()
 
-    def _on_thumbnail_ready(self, row: int, pixmap: QPixmap) -> None:
+    def _on_thumbnail_ready(self, row: int, image: QImage) -> None:
         if 0 <= row < self._image_list_widget.count():
             item = self._image_list_widget.item(row)
-            item.setIcon(QIcon(pixmap))
+            item.setIcon(QIcon(QPixmap.fromImage(image)))
 
     def _on_image_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:
         if current is None:
@@ -1209,7 +1630,30 @@ class AnnotateWidget(QWidget):
         self._scene.clear_annotations()
         # clear_annotations 已移除旧 pixmap item，重置引用避免悬空
         self._current_pixmap_item = None
-        pixmap = QPixmap(image_path)
+        worker = self._image_load_worker
+        if worker is not None:
+            try:
+                if worker.isRunning():
+                    self._pending_image_path = image_path
+                    worker.stop()
+                    return
+            except RuntimeError:
+                pass
+        self._start_image_load(image_path)
+
+    def _start_image_load(self, image_path: str) -> None:
+        worker = _ImageLoadWorker(image_path, parent=None)
+        worker.image_ready.connect(self._on_image_loaded)
+        worker.error_signal.connect(self._on_image_load_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._on_image_load_finished(_worker))
+        self._image_load_worker = worker
+        worker.start()
+
+    def _on_image_loaded(self, image_path: str, image: QImage) -> None:
+        if image_path != self._current_image_path:
+            return
+        pixmap = QPixmap.fromImage(image)
         if pixmap.isNull():
             return
         if self._current_pixmap_item is not None:
@@ -1220,6 +1664,21 @@ class AnnotateWidget(QWidget):
         anns = self._annotations_dict.get(image_path, [])
         self._scene.load_annotations(anns)
         self._view.fit_to_item()
+
+    def _on_image_load_error(self, image_path: str, message: str) -> None:
+        if image_path != self._current_image_path:
+            return
+        window = self.window()
+        if hasattr(window, "statusbar"):
+            window.statusbar.showMessage(f"图片加载失败: {message}", 5000)
+
+    def _on_image_load_finished(self, worker: _ImageLoadWorker) -> None:
+        if self._image_load_worker is worker:
+            self._image_load_worker = None
+        pending_path = self._pending_image_path
+        self._pending_image_path = ""
+        if pending_path and pending_path == self._current_image_path:
+            QTimer.singleShot(0, lambda path=pending_path: self._start_image_load(path))
 
     def _save_current_annotations(self) -> None:
         if self._current_image_path:
@@ -1374,12 +1833,21 @@ class AnnotateWidget(QWidget):
             sam2_dir = str(SYSTEM_MODEL_SUBDIRS["sam2"])
             os.makedirs(sam2_dir, exist_ok=True)
             scan_dirs = [sam2_dir]
-            if self._current_image_path:
-                scan_dirs.append(os.path.dirname(self._current_image_path))
             for d in scan_dirs:
                 model_info = sam.scan_model_file(d)
                 if model_info:
                     break
+            if model_info and not sam.verify_official_model_file(
+                model_info[0],
+                model_info[1],
+            ):
+                QMessageBox.warning(
+                    self,
+                    "模型校验失败",
+                    "系统模型目录中的 SAM2 权重未通过官方 SHA-256 校验。"
+                    "该文件不会被自动加载，请重新下载或手动确认可信模型。",
+                )
+                model_info = None
             # device 需在创建下载 worker 之前计算，确保下载完成回调 lambda 可引用
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1387,7 +1855,10 @@ class AnnotateWidget(QWidget):
                 model_path, model_type, config_path = model_info
             else:
                 start_dir = scan_dirs[0] if scan_dirs else ""
-                from yolo26_app.core.auto_annotator import SAM2_MODEL_URLS
+                from yolo26_app.core.auto_annotator import (
+                    SAM2_MODEL_SHA256,
+                    SAM2_MODEL_URLS,
+                )
                 model_names = list(SAM2_MODEL_URLS.keys())
                 choice, ok = QInputDialog.getItem(
                     self, "SAM 2 模型",
@@ -1400,20 +1871,48 @@ class AnnotateWidget(QWidget):
                     save_path = os.path.join(save_dir, f"{choice}.pt")
                     progress_dlg = QProgressDialog(f"正在下载 {choice}...", "取消", 0, 100, self)
                     progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
-                    self._download_worker = _ModelDownloadWorker(url, save_path, self)
-                    self._download_worker.progress.connect(progress_dlg.setValue)
-                    self._download_worker.finished.connect(lambda p: (progress_dlg.close(), self._on_sam_model_downloaded(p, sam, device)))
-                    self._download_worker.error.connect(lambda e: (progress_dlg.close(), QMessageBox.warning(self, "下载失败", str(e))))
-                    progress_dlg.canceled.connect(self._download_worker.stop)
-                    self._download_worker.start()
-                    self._download_worker.finished.connect(self._download_worker.deleteLater)
-                    self._download_worker.finished.connect(lambda: setattr(self, '_download_worker', None))
+                    worker = _ModelDownloadWorker(
+                        url,
+                        save_path,
+                        SAM2_MODEL_SHA256[choice],
+                        parent=None,
+                    )
+                    worker.progress.connect(progress_dlg.setValue)
+                    worker.completed.connect(
+                        lambda p: (
+                            progress_dlg.close(),
+                            self._on_sam_model_downloaded(p, sam, device),
+                        )
+                    )
+                    worker.error.connect(
+                        lambda e: (
+                            progress_dlg.close(),
+                            QMessageBox.warning(self, "下载失败", str(e)),
+                        )
+                    )
+                    progress_dlg.canceled.connect(worker.stop)
+                    worker.finished.connect(worker.deleteLater)
+                    worker.finished.connect(
+                        lambda _worker=worker: self._on_download_worker_finished(_worker)
+                    )
+                    self._download_worker = worker
+                    worker.start()
                     progress_dlg.exec()
                     return
                 model_path, _ = QFileDialog.getOpenFileName(
                     self, "选择 SAM 2 模型权重", start_dir, "PyTorch Weights (*.pt *.pth)"
                 )
                 if not model_path:
+                    return
+                trusted = QMessageBox.warning(
+                    self,
+                    "确认模型来源",
+                    "PyTorch 权重可能在加载时执行序列化代码。"
+                    "请仅打开由你训练或来自可信官方来源的模型。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if trusted != QMessageBox.StandardButton.Yes:
                     return
                 config_path = "configs/sam2.1/sam2.1_hiera_s.yaml"
                 filename = os.path.basename(model_path).lower()
@@ -1473,9 +1972,16 @@ class AnnotateWidget(QWidget):
         else:
             QMessageBox.warning(self, "错误", "SAM 2 模型加载失败")
 
+    def _on_download_worker_finished(self, worker: _ModelDownloadWorker) -> None:
+        if self._download_worker is worker:
+            self._download_worker = None
+
     def _text_detect(self) -> None:
         if not self._current_image_path:
             QMessageBox.warning(self, "提示", "请先选择一张图片")
+            return
+        if self._dino_worker is not None and self._dino_worker.isRunning():
+            QMessageBox.information(self, "提示", "文本检测任务正在运行")
             return
         dino = self._get_dino_annotator()
         if not dino.available:
@@ -1496,6 +2002,16 @@ class AnnotateWidget(QWidget):
             )
             if not weights_path:
                 return
+            trusted = QMessageBox.warning(
+                self,
+                "确认模型来源",
+                "PyTorch 权重可能在加载时执行序列化代码。"
+                "请仅打开来自可信来源的 Grounding DINO 模型。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if trusted != QMessageBox.StandardButton.Yes:
+                return
             if not dino.load_model(config_path, weights_path):
                 QMessageBox.critical(self, "错误", "Grounding DINO 模型加载失败")
                 return
@@ -1504,17 +2020,18 @@ class AnnotateWidget(QWidget):
         )
         if not ok or not text.strip():
             return
-        self._dino_worker = _DinoWorker(dino, self._current_image_path, text.strip())
-        self._dino_worker.done_signal.connect(self._on_dino_done)
-        self._dino_worker.error_signal.connect(
+        worker = _DinoWorker(dino, self._current_image_path, text.strip())
+        worker.done_signal.connect(self._on_dino_done)
+        worker.error_signal.connect(
             lambda msg: QMessageBox.warning(self, "检测失败", msg)
         )
-        self._dino_worker.finished.connect(self._dino_worker.deleteLater)
-        self._dino_worker.finished.connect(lambda: setattr(self, '_dino_worker', None))
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._on_dino_worker_finished(_worker))
+        self._dino_worker = worker
         window = self.window()
         if hasattr(window, "statusbar"):
             window.statusbar.showMessage("正在检测...")
-        self._dino_worker.start()
+        worker.start()
 
     def _on_dino_done(self, annotations) -> None:
         self._scene.load_annotations(annotations)
@@ -1526,13 +2043,29 @@ class AnnotateWidget(QWidget):
         if not annotations:
             QMessageBox.information(self, "提示", "未检测到目标")
 
+    def _on_dino_worker_finished(self, worker: _DinoWorker) -> None:
+        if self._dino_worker is worker:
+            self._dino_worker = None
+
+    def set_model_session(self, session) -> None:
+        self._get_yolo_annotator().set_model_session(session)
+
     def set_yolo_model(self, model) -> None:
         self._get_yolo_annotator().set_model(model)
 
     def _batch_detect(self) -> None:
         yolo = self._get_yolo_annotator()
-        if yolo._model is None:
+        if not yolo.has_model:
             QMessageBox.information(self, "提示", "请先在测试页面加载模型")
+            return
+        if (
+            self._batch_worker is not None
+            and self._batch_worker.isRunning()
+        ) or (
+            self._yolo_sam_worker is not None
+            and self._yolo_sam_worker.isRunning()
+        ):
+            QMessageBox.information(self, "提示", "批量标注任务正在运行")
             return
         if not self._image_list:
             QMessageBox.warning(self, "提示", "请先导入图片")

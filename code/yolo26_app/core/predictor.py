@@ -1,3 +1,4 @@
+from functools import wraps
 from typing import Optional, Tuple
 
 import os
@@ -8,23 +9,36 @@ import numpy as np
 from ultralytics import YOLO
 
 from yolo26_app.core.logger import get_logger
+from yolo26_app.core.model_session import ModelSession
 
 _TENSORRT_BUILDER_FLAG_ALIASES = (("FP16", "kFP16"), ("INT8", "kINT8"), ("TF32", "kTF32"))
 
 logger = get_logger(__name__)
 
 
+def _serialized_model_access(method):
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.session.lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class YOLOPredictor:
     def __init__(self) -> None:
+        self.session = ModelSession()
         self.model: Optional[YOLO] = None
         self.model_path: str = ""
         self._is_onnx: bool = False
         self._model_task: str = ""
 
+    @_serialized_model_access
     def load_model(self, path: str, task: str = "") -> bool:
         if self.model is not None:
             del self.model
             import torch
+
             torch.cuda.empty_cache()
         try:
             if task and path.lower().endswith((".onnx", ".engine")):
@@ -35,14 +49,16 @@ class YOLOPredictor:
                 self._model_task = getattr(self.model, "task", "") or ""
             self.model_path = path
             self._is_onnx = path.lower().endswith(".onnx")
+            self.session.set_model(self.model, task=self._model_task)
             return True
         except Exception:
             self.model = None
             self.model_path = ""
             self._is_onnx = False
             self._model_task = ""
+            self.session.set_model(None)
             return False
-
+    @_serialized_model_access
     def predict_image(self, image_path: str, conf: float = 0.25, iou: float = 0.7, imgsz: int = 640, device: str = "", max_det: int = 300) -> Tuple[np.ndarray, object]:
         if self.model is None:
             return np.array([]), None
@@ -63,6 +79,7 @@ class YOLOPredictor:
             return annotated, results[0]
         return image, None
 
+    @_serialized_model_access
     def predict_frame(self, frame_np: np.ndarray, conf: float = 0.25, iou: float = 0.7, imgsz: int = 640, device: str = "", max_det: int = 300) -> Tuple[np.ndarray, object]:
         if self.model is None:
             return frame_np, None
@@ -80,6 +97,7 @@ class YOLOPredictor:
             return annotated, results[0]
         return frame_np, None
 
+    @_serialized_model_access
     def validate_model(self, data: str) -> dict:
         if self.model is None:
             raise RuntimeError("模型未加载")
@@ -119,6 +137,7 @@ class YOLOPredictor:
                 result["map50_95"] = float(metrics.box.map) if metrics.box.map is not None else 0.0
         return result
 
+    @_serialized_model_access
     def export_model(self, format: str, output_dir: str, **kwargs) -> Tuple[str, bool, str]:
         """Export model to specified format.
 
@@ -372,6 +391,7 @@ class YOLOPredictor:
         except Exception as e:
             return False, str(e)
 
+    @_serialized_model_access
     def get_model_info(self) -> dict:
         if self.model is None:
             return {}

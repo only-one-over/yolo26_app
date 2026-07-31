@@ -852,6 +852,19 @@ class TrainWidget(QWidget):
         if not self._validate_dataset():
             return
 
+        custom_model = self.custom_model_edit.text().strip()
+        if custom_model.lower().endswith((".pt", ".pth")):
+            trusted = QMessageBox.warning(
+                self,
+                "确认模型来源",
+                "PyTorch 权重可能在加载时执行序列化代码。"
+                "请仅使用由你训练或来自可信官方来源的预训练模型。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if trusted != QMessageBox.StandardButton.Yes:
+                return
+
         config = self._build_config()
         project_path = self._project_path or ""
 
@@ -874,9 +887,8 @@ class TrainWidget(QWidget):
         self.stop_btn.setEnabled(True)
         self._set_form_enabled(False)
 
-        save_dir = Path(self._project_path) / "runs" / (config.name or "train")
-        self._current_save_dir = save_dir
-        self._csv_timer.start()
+        self._current_save_dir = None
+        self._csv_timer.stop()
 
         self._trainer.start()
 
@@ -890,11 +902,14 @@ class TrainWidget(QWidget):
         self._csv_timer.stop()
         if self._trainer is not None and self._trainer.isRunning():
             self._on_stop()
-            self._trainer.wait(30000)
-            if self._trainer.isRunning():
-                logger.warning("警告:训练线程未在 30 秒内退出,可能仍在后台运行")
+            QMessageBox.warning(
+                self,
+                "Task running",
+                "Training is still stopping. Wait for it to finish before closing the app.",
+            )
+            event.ignore()
+            return
         super().closeEvent(event)
-
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         # 首次显示时重新应用 splitter 比例，防止布局重算导致右侧面板拉伸动画

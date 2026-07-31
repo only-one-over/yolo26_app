@@ -1,6 +1,7 @@
 import logging
 import os
 import glob as _glob
+import hashlib
 from typing import List, Optional, Tuple, Dict
 
 import cv2
@@ -9,6 +10,7 @@ from PyQt6.QtCore import QRectF, QPointF
 from PyQt6.QtGui import QPolygonF
 
 from yolo26_app.core.annotation_canvas import AnnotationItem
+from yolo26_app.core.model_session import ModelSession
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +20,49 @@ class YOLOPreAnnotator:
 
     def __init__(self) -> None:
         self._model = None
+        self._session: Optional[ModelSession] = None
 
     def set_model(self, model) -> None:
+        self._session = None
         self._model = model
+
+    def set_model_session(self, session: ModelSession) -> None:
+        self._session = session
+        self._model = None
+
+    @property
+    def has_model(self) -> bool:
+        """Return whether either the shared session or legacy model is ready."""
+        if self._session is not None:
+            with self._session.lock:
+                return self._session.model is not None
+        return self._model is not None
+
+    def predict_results(self, source, conf: float = 0.25):
+        """Run YOLO prediction through the shared session lock when available."""
+        quantize = None
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                quantize = 16
+        except ImportError:
+            pass
+
+        predict_kwargs = {"source": source, "conf": conf, "verbose": False}
+        if quantize is not None:
+            predict_kwargs["quantize"] = quantize
+
+        if self._session is not None:
+            with self._session.lock:
+                model = self._session.model
+                if model is None:
+                    return []
+                return model.predict(**predict_kwargs)
+
+        if self._model is None:
+            return []
+        return self._model.predict(**predict_kwargs)
 
     def annotate(self, image_path: str, conf: float = 0.25, class_mapping: Optional[Dict[int, int]] = None) -> List[AnnotationItem]:
         """
@@ -34,7 +76,7 @@ class YOLOPreAnnotator:
         Returns:
             AnnotationItem 列表
         """
-        if self._model is None:
+        if not self.has_model:
             return []
 
         try:
@@ -43,17 +85,7 @@ class YOLOPreAnnotator:
                 return []
             h, w = image.shape[:2]
 
-            quantize = None
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    quantize = 16
-            except ImportError:
-                pass
-            predict_kwargs = dict(source=image, conf=conf, verbose=False)
-            if quantize is not None:
-                predict_kwargs["quantize"] = quantize
-            results = self._model.predict(**predict_kwargs)
+            results = self.predict_results(image, conf=conf)
             if not results or len(results) == 0:
                 return []
 
@@ -115,6 +147,12 @@ SAM2_MODEL_URLS = {
     "sam2.1_hiera_b+": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
     "sam2.1_hiera_l": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
 }
+SAM2_MODEL_SHA256 = {
+    "sam2.1_hiera_t": "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
+    "sam2.1_hiera_s": "6d1aa6f30de5c92224f8172114de081d104bbd23dd9dc5c58996f0cad5dc4d38",
+    "sam2.1_hiera_b+": "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5",
+    "sam2.1_hiera_l": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318",
+}
 
 GROUNDING_DINO_MODEL_URL = "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
 
@@ -173,6 +211,20 @@ class SAMAnnotator:
                 if matches:
                     return matches[0], prefix, config_path
         return None
+
+    @staticmethod
+    def verify_official_model_file(model_path: str, model_type: str) -> bool:
+        expected = SAM2_MODEL_SHA256.get(model_type)
+        if expected is None:
+            return False
+        hasher = hashlib.sha256()
+        try:
+            with open(model_path, "rb") as model_file:
+                for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+        except OSError:
+            return False
+        return hasher.hexdigest() == expected
 
     def load_model(self, model_path: str, config_path: str, device: str = "cuda") -> bool:
         if not self._available:

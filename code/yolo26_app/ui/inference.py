@@ -265,8 +265,8 @@ class TestWidget(QWidget):
         self._show_depth = False
         self._batch_images: List[str] = []
         self._batch_index: int = 0
-        self._inference_worker = _InferenceWorker(self.predictor, parent=None)
-        self._inference_worker.result_signal.connect(self._on_inference_result)
+        self._inference_worker: Optional[_InferenceWorker] = None
+        self._retired_inference_workers: List[_InferenceWorker] = []
         self._last_frame: Optional[np.ndarray] = None
         self._image_predict_worker: Optional[_ImagePredictWorker] = None
         self._model_load_worker: Optional[_ModelLoadWorker] = None
@@ -569,11 +569,11 @@ class TestWidget(QWidget):
     }
 
     def _set_model_state(self, state: str) -> None:
-        """更新模型任务状态并刷新 UI 标签。"""
+        """Update model task state and refresh the UI label."""
         self._model_state = state
+        self.predictor.session.set_state(state, self.device_combo.currentData() or "")
         text = self._STATE_TEXTS.get(state, state)
         self.model_state_label.setText(f"状态: {text}")
-
     def _check_model_busy(self) -> bool:
         """检查是否有模型任务正在运行，弹窗提示并返回 True。"""
         state_labels = {
@@ -595,6 +595,17 @@ class TestWidget(QWidget):
             return
         if self._check_model_busy():
             return
+        if model_path.lower().endswith((".pt", ".pth")):
+            trusted = QMessageBox.warning(
+                self,
+                "确认模型来源",
+                "PyTorch 权重可能在加载时执行序列化代码。"
+                "请仅加载由你训练或来自可信官方来源的模型。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if trusted != QMessageBox.StandardButton.Yes:
+                return
         # For ONNX files, try to infer or ask for task type (UI thread, 快速操作)
         task = ""
         if model_path.lower().endswith(".onnx"):
@@ -643,7 +654,7 @@ class TestWidget(QWidget):
                 msg += f"\n类别: {', '.join(names[:10])}"
                 if len(names) > 10:
                     msg += "..."
-            self.model_loaded.emit(self.predictor.model)
+            self.model_loaded.emit(self.predictor.session)
             QMessageBox.information(self, "成功", msg)
         else:
             QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
@@ -764,6 +775,34 @@ class TestWidget(QWidget):
             return
         self._start_capture(0)
 
+    def _create_inference_worker(self) -> None:
+        worker = _InferenceWorker(self.predictor, parent=None)
+        worker.result_signal.connect(self._on_inference_result)
+        self._inference_worker = worker
+
+    def _start_inference_worker(self) -> None:
+        if self._inference_worker is None:
+            self._create_inference_worker()
+        worker = self._inference_worker
+        if worker is not None and not worker.isRunning():
+            worker.start()
+
+    def _dispose_inference_worker(self, worker: _InferenceWorker) -> None:
+        if worker in self._retired_inference_workers:
+            self._retired_inference_workers.remove(worker)
+        worker.deleteLater()
+
+    def _stop_inference_worker(self) -> None:
+        worker = self._inference_worker
+        self._inference_worker = None
+        if worker is None:
+            return
+        if worker.isRunning():
+            self._retired_inference_workers.append(worker)
+            worker.finished.connect(lambda: self._dispose_inference_worker(worker))
+            worker.stop()
+        else:
+            worker.deleteLater()
     def _start_capture(self, source: Union[str, int]) -> None:
         if self._check_model_busy():
             return
@@ -772,13 +811,12 @@ class TestWidget(QWidget):
         self._batch_index = 0
         self.prev_btn.setVisible(False)
         self.next_btn.setVisible(False)
-        if not self._inference_worker.isRunning():
-            self._inference_worker.start()
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             QMessageBox.warning(self, "警告", "无法打开视频源")
             self.cap = None
             return
+        self._start_inference_worker()
         self._set_model_state(self.STATE_PREDICTING)
         self.stop_btn.setEnabled(True)
         self.image_btn.setEnabled(False)
@@ -814,8 +852,6 @@ class TestWidget(QWidget):
         self._batch_index = 0
         self.prev_btn.setVisible(False)
         self.next_btn.setVisible(False)
-        if not self._inference_worker.isRunning():
-            self._inference_worker.start()
         serial = self.rs_device_combo.currentData()
         if serial is None:
             QMessageBox.warning(self, "警告", "请先选择一个 RealSense 设备")
@@ -824,6 +860,7 @@ class TestWidget(QWidget):
         if not success:
             QMessageBox.warning(self, "警告", "无法打开 RealSense 设备")
             return
+        self._start_inference_worker()
         self._set_model_state(self.STATE_PREDICTING)
         self.stop_btn.setEnabled(True)
         self.image_btn.setEnabled(False)
@@ -878,31 +915,34 @@ class TestWidget(QWidget):
             self._fps = 1.0 / delta
         self._last_frame_time = current_time
 
+        worker = self._inference_worker
+        if worker is None:
+            return
+
         if self._show_depth and depth_np is not None:
             colorized = self.rs_camera.colorize_depth(depth_np)
             if colorized is not None:
                 self._display_np_image(colorized)
             else:
-                if not self._inference_worker.is_busy:
+                if not worker.is_busy:
                     adv_params = self._get_advanced_params()
-                    self._inference_worker.submit(
+                    worker.submit(
                         frame, self.conf_spin.value(), self.iou_spin.value(),
                         imgsz=adv_params["imgsz"], device=adv_params["device"], max_det=adv_params["max_det"]
                     )
         else:
-            if self._inference_worker.is_busy:
+            if worker.is_busy:
                 self.fps_label.setText(f"FPS: {self._fps:.1f}")
             else:
                 adv_params = self._get_advanced_params()
-                self._inference_worker.submit(
+                worker.submit(
                     frame, self.conf_spin.value(), self.iou_spin.value(),
                     imgsz=adv_params["imgsz"], device=adv_params["device"], max_det=adv_params["max_det"]
                 )
 
     def _on_stop(self) -> None:
         self.timer.stop()
-        if self._inference_worker.isRunning():
-            self._inference_worker.stop()
+        self._stop_inference_worker()
         if self.cap is not None:
             self.cap.release()
             self.cap = None
@@ -921,25 +961,34 @@ class TestWidget(QWidget):
         self.depth_check.setChecked(False)
         self._show_depth = False
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def has_running_background_workers(self) -> bool:
+        workers = [
+            self._inference_worker,
+            *self._retired_inference_workers,
+            self._model_load_worker,
+            self._validate_worker,
+            self._export_worker,
+            self._image_predict_worker,
+        ]
+        return any(worker is not None and worker.isRunning() for worker in workers)
+
+    def request_stop_background_workers(self) -> None:
         self._on_stop()
-        # 先请求所有工作线程协作停止，再同步等待退出
         for worker in (self._validate_worker, self._export_worker, self._image_predict_worker):
             if worker is not None:
                 worker.request_stop()
-        # closeEvent 中同步等待线程退出，防止析构时崩溃
-        if self._inference_worker is not None and self._inference_worker.isRunning():
-            self._inference_worker.wait(5000)
-        if self._model_load_worker is not None and self._model_load_worker.isRunning():
-            self._model_load_worker.wait(5000)
-        if self._validate_worker is not None and self._validate_worker.isRunning():
-            self._validate_worker.wait(5000)
-        if self._export_worker is not None and self._export_worker.isRunning():
-            self._export_worker.wait(5000)
-        if self._image_predict_worker is not None and self._image_predict_worker.isRunning():
-            self._image_predict_worker.wait(5000)
-        super().closeEvent(event)
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.request_stop_background_workers()
+        if self.has_running_background_workers():
+            QMessageBox.warning(
+                self,
+                "Task running",
+                "Model task is still stopping. Wait for it to finish before closing the app.",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
     def _on_validate(self) -> None:
         if self.predictor.model is None:
             QMessageBox.warning(self, "警告", "请先加载模型")
@@ -1078,7 +1127,7 @@ class TestWidget(QWidget):
                             msg += f"\n类别: {', '.join(names[:10])}"
                             if len(names) > 10:
                                 msg += "..."
-                        self.model_loaded.emit(self.predictor.model)
+                        self.model_loaded.emit(self.predictor.session)
                         QMessageBox.information(self, "成功", msg)
                     else:
                         QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")
@@ -1104,7 +1153,7 @@ class TestWidget(QWidget):
                             msg += f"\n类别: {', '.join(names[:10])}"
                             if len(names) > 10:
                                 msg += "..."
-                        self.model_loaded.emit(self.predictor.model)
+                        self.model_loaded.emit(self.predictor.session)
                         QMessageBox.information(self, "成功", msg)
                     else:
                         QMessageBox.critical(self, "错误", "模型加载失败，请检查文件路径和格式")

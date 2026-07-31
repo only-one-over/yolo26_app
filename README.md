@@ -4,7 +4,7 @@
 
 **基于 Ultralytics YOLO 的桌面端标注-训练-推理一体化应用（支持 YOLO26 / YOLOv8）**
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt6-6.0+-green.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![Ultralytics](https://img.shields.io/badge/Ultralytics-YOLO26%2Fv8-orange.svg)](https://github.com/ultralytics/ultralytics)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -224,7 +224,7 @@ output_dir/
 
 ### 环境要求
 
-- Python 3.9+（推荐 3.10/3.11，3.12 部分依赖可能不兼容）
+- Python 3.10+（推荐 3.10/3.11，3.12 部分可选依赖可能不兼容）
 - NVIDIA GPU（推荐，CPU 也可运行但速度较慢）
 - CUDA Toolkit 11.8 或 12.1+（需与 PyTorch 匹配）
 
@@ -629,7 +629,7 @@ TestWidget._on_timer_timeout (视频流)
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Python | 3.9+ | 编程语言 |
+| Python | 3.10+ | 编程语言 |
 | PyQt6 | 6.0+ | GUI 框架 |
 | Ultralytics | 8.0+ | YOLO 模型框架 |
 | PyTorch | — | 深度学习框架 |
@@ -701,7 +701,7 @@ names: ['person', 'car']
 
 | 组件 | 推荐版本 | 兼容版本 | 备注 |
 |------|---------|---------|------|
-| Python | 3.10 / 3.11 | 3.9 - 3.11 | 3.12 部分依赖（如 SAM2）可能不兼容 |
+| Python | 3.10 / 3.11 | 3.10 - 3.12 | 3.12 部分可选依赖（如 SAM2）可能不兼容 |
 | PyTorch | 2.1+ | 2.0 - 2.4 | 需与 CUDA 版本严格匹配 |
 | CUDA Toolkit | 12.1 | 11.8 / 12.1 / 12.4 | `nvidia-smi` 显示的版本是驱动支持的最高版本 |
 | Ultralytics | ≥ 8.3.0 | ≥ 8.0 | TensorRT 10 用户必须 ≥ 8.3.0 |
