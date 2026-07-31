@@ -1,0 +1,6 @@
+include README.md
+include README_EN.md
+include LICENSE
+recursive-include code/yolo26_app/core *.yaml
+recursive-include code/yolo26_app/ui/icons *.svg
+graft docs

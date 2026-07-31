@@ -50,6 +50,18 @@ pip install -e .
 
 GPU、SAM2、Grounding DINO、RealSense 与 TensorRT 的安装方式见[环境与模型](docs/environment-and-models.md)。
 
+### 构建与安装 wheel
+
+发布或验证安装产物时，使用标准 wheel：
+
+~~~bash
+python -m pip install build
+python -m build
+python -m pip install --force-reinstall dist/yolo26_app-*.whl
+~~~
+
+构建命令会同时生成 wheel 与源码分发包。wheel 已包含界面 SVG 图标和 YAML 模板。
+
 ## 启动
 
 ~~~bash
@@ -60,6 +72,12 @@ Windows 使用一键安装脚本后，也可以直接执行：
 
 ~~~bat
 venv\Scripts\python.exe main.py
+~~~
+
+安装 wheel 后，Windows 可以直接运行图形启动命令：
+
+~~~bat
+yolo26-app
 ~~~
 
 ## 基本使用

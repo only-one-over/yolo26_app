@@ -4,8 +4,16 @@
 """
 from pathlib import Path
 
-# 工作区根目录（项目根目录：d:\ultralytics-main）
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+def _resolve_workspace_root() -> Path:
+    """Use the checkout while developing and a user-writable directory when installed."""
+    checkout_root = Path(__file__).resolve().parents[3]
+    if (checkout_root / "pyproject.toml").is_file():
+        return checkout_root
+    return Path.home() / ".yolo26_app" / "workspace"
+
+
+WORKSPACE_ROOT = _resolve_workspace_root()
 
 # 系统模型目录（按用途分子文件夹）
 SYSTEM_MODEL_DIR = WORKSPACE_ROOT / "system_model"
