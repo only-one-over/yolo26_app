@@ -49,17 +49,16 @@ jobs:
       - name: Verify archive layout
         shell: pwsh
         run: |
-          $archive = Get-ChildItem -Path release -Filter "YOLO26-App-${{ matrix.variant }}.zip" | Select-Object -First 1
-          if ($null -eq $archive) {
-            throw "Expected ZIP archive was not created."
-          }
-          Expand-Archive -LiteralPath $archive.FullName -DestinationPath extracted -Force
-          $launcher = "extracted/YOLO26-App-${{ matrix.variant }}/YOLO26-App-${{ matrix.variant }}.exe"
+          $launcher = "release/YOLO26-App-${{ matrix.variant }}/YOLO26-App-${{ matrix.variant }}.exe"
           if (-not (Test-Path $launcher)) {
             throw "Portable launcher was not found: $launcher"
           }
-          if (-not (Test-Path "extracted/YOLO26-App-${{ matrix.variant }}/build-info.json")) {
+          if (-not (Test-Path "release/YOLO26-App-${{ matrix.variant }}/build-info.json")) {
             throw "Build metadata was not found."
+          }
+          $assets = Get-ChildItem -Path release -Filter "YOLO26-App-${{ matrix.variant }}.zip*"
+          if ($assets.Count -eq 0) {
+            throw "No Release archive or archive parts were created."
           }
       - uses: actions/upload-artifact@v4
         with:
@@ -67,6 +66,8 @@ jobs:
           path: |
             release/*.zip
             release/*.zip.sha256
+            release/*.zip.part*
+            release/*.reassemble.ps1
           if-no-files-found: error
 
   release:
@@ -93,4 +94,6 @@ jobs:
           files: |
             release/*.zip
             release/*.zip.sha256
+            release/*.zip.part*
+            release/*.reassemble.ps1
           fail_on_unmatched_files: true

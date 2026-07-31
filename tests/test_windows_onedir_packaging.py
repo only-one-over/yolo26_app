@@ -52,6 +52,26 @@ def test_cuda_variant_and_invalid_variant_handling(tmp_path: Path) -> None:
         raise AssertionError("Invalid variant should be rejected.")
 
 
+def test_large_release_archive_is_split_with_reassembly_metadata(tmp_path: Path) -> None:
+    module = _load_build_module()
+    archive = tmp_path / "YOLO26-App-CUDA.zip"
+    archive.write_bytes(b"0123456789")
+    archive.with_suffix(".zip.sha256").write_text("checksum  YOLO26-App-CUDA.zip\n", encoding="ascii")
+
+    assets = module.split_release_archive(archive, max_asset_size=4)
+
+    assert [asset.name for asset in assets] == [
+        "YOLO26-App-CUDA.zip.part001",
+        "YOLO26-App-CUDA.zip.part002",
+        "YOLO26-App-CUDA.zip.part003",
+        "YOLO26-App-CUDA.zip.sha256",
+        "YOLO26-App-CUDA.reassemble.ps1",
+    ]
+    assert b"".join(asset.read_bytes() for asset in assets[:3]) == b"0123456789"
+    assert not archive.exists()
+    assert "Get-FileHash" in assets[-1].read_text(encoding="utf-8")
+
+
 def test_windows_release_workflow_builds_and_publishes_both_variants() -> None:
     workflow_path = PROJECT_ROOT / ".github" / "workflows" / "windows-release.yml"
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
@@ -66,6 +86,9 @@ def test_windows_release_workflow_builds_and_publishes_both_variants() -> None:
     }
     assert workflow["jobs"]["release"]["needs"] == "build"
     assert workflow["jobs"]["release"]["permissions"]["contents"] == "write"
+    release_files = workflow["jobs"]["release"]["steps"][-1]["with"]["files"]
+    assert "release/*.zip.part*" in release_files
+    assert "release/*.reassemble.ps1" in release_files
     install_step = next(
         step for step in build_job["steps"] if step.get("name") == "Install ${{ matrix.variant }} runtime"
     )

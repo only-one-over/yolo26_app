@@ -14,6 +14,7 @@ from typing import Sequence
 
 VARIANTS = ("cpu", "cuda")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MAX_ASSET_SIZE_MIB = 1900
 
 
 def app_name(variant: str) -> str:
@@ -130,6 +131,15 @@ def write_distribution_files(app_dir: Path, variant: str) -> None:
     )
 
 
+def sha256_file(path: Path) -> str:
+    """Calculate a SHA-256 digest without loading a large archive into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def create_archive(app_dir: Path) -> Path:
     """Create a ZIP whose top-level directory is the onedir application folder."""
     archive_base = app_dir.parent / app_dir.name
@@ -141,14 +151,61 @@ def create_archive(app_dir: Path) -> Path:
             base_dir=app_dir.name,
         )
     )
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix(archive.suffix + ".sha256").write_text(
-        f"{digest}  {archive.name}\n", encoding="ascii"
+        f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii"
     )
     return archive
 
 
-def build(variant: str, output_dir: Path) -> Path:
+def write_reassembly_script(archive: Path) -> Path:
+    """Write a PowerShell helper that joins split Release assets and verifies them."""
+    script = archive.with_suffix(".reassemble.ps1")
+    script.write_text(
+        "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$archive = Join-Path $PSScriptRoot '{archive.name}'",
+                f"$parts = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '{archive.name}.part*' | Sort-Object Name",
+                "if ($parts.Count -eq 0) { throw 'No archive parts were found.' }",
+                "$output = [System.IO.File]::Open($archive, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)",
+                "try {",
+                "  foreach ($part in $parts) {",
+                "    $input = [System.IO.File]::OpenRead($part.FullName)",
+                "    try { $input.CopyTo($output) } finally { $input.Dispose() }",
+                "  }",
+                "} finally { $output.Dispose() }",
+                f"$expected = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '{archive.name}.sha256')).Split()[0]",
+                "$actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()",
+                "if ($actual -ne $expected) { throw 'Archive checksum verification failed.' }",
+                "Write-Host \"Created and verified $archive\"",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return script
+
+
+def split_release_archive(archive: Path, max_asset_size: int) -> list[Path]:
+    """Split an oversized Release ZIP into GitHub-compatible sequential parts."""
+    if archive.stat().st_size <= max_asset_size:
+        return [archive, archive.with_suffix(archive.suffix + ".sha256")]
+
+    parts: list[Path] = []
+    with archive.open("rb") as source:
+        index = 1
+        while chunk := source.read(max_asset_size):
+            part = archive.with_name(f"{archive.name}.part{index:03d}")
+            part.write_bytes(chunk)
+            parts.append(part)
+            index += 1
+    archive.unlink()
+    parts.append(archive.with_suffix(archive.suffix + ".sha256"))
+    parts.append(write_reassembly_script(archive))
+    return parts
+
+
+def build(variant: str, output_dir: Path, max_asset_size: int) -> list[Path]:
     """Run PyInstaller and archive a completed portable distribution."""
     args, app_dir = build_pyinstaller_args(PROJECT_ROOT, variant, output_dir)
     if app_dir.exists():
@@ -161,20 +218,31 @@ def build(variant: str, output_dir: Path) -> Path:
     if not executable.is_file():
         raise RuntimeError(f"PyInstaller did not create the expected launcher: {executable}")
     write_distribution_files(app_dir, variant)
-    return create_archive(app_dir)
+    return split_release_archive(create_archive(app_dir), max_asset_size)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=VARIANTS, required=True)
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "release")
+    parser.add_argument(
+        "--max-asset-size-mib",
+        type=int,
+        default=DEFAULT_MAX_ASSET_SIZE_MIB,
+        help="Maximum size of a single GitHub Release asset before ZIP splitting.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    archive = build(args.variant, args.output_dir.resolve())
-    print(f"Created {archive}")
+    assets = build(
+        args.variant,
+        args.output_dir.resolve(),
+        args.max_asset_size_mib * 1024 * 1024,
+    )
+    for asset in assets:
+        print(f"Created {asset}")
     return 0
 
 

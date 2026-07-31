@@ -7,6 +7,15 @@ The release workflow produces two Windows x64 portable onedir archives:
 
 Download one archive from the GitHub Release page, extract it completely, then start the matching YOLO26-App-<VARIANT>.exe. Do not move only the .exe; it depends on the adjacent files in its onedir folder.
 
+GitHub Release assets are limited to 2 GiB. If the CUDA archive exceeds that size, the release provides YOLO26-App-CUDA.zip.part001, additional sequential parts, YOLO26-App-CUDA.zip.sha256, and YOLO26-App-CUDA.reassemble.ps1. Download every part and the two helper files into one folder, then run:
+
+~~~powershell
+powershell -ExecutionPolicy Bypass -File .\YOLO26-App-CUDA.reassemble.ps1
+Expand-Archive .\YOLO26-App-CUDA.zip
+~~~
+
+The script joins the parts and verifies the resulting ZIP checksum before extraction.
+
 The portable distribution contains the application, Python runtime, core dependencies, SVG/YAML resources, LICENSE, README.txt, and build-info.json. It deliberately excludes model weights and user data. On first start, user projects, annotations, models, and logs are created under %USERPROFILE%\.yolo26_app\workspace.
 
 SAM2, Grounding DINO, RealSense, and TensorRT remain optional integrations. TensorRT must match the target machine's CUDA environment and is therefore not included in either archive.
