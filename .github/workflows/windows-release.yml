@@ -1,0 +1,96 @@
+name: Windows onedir release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update, for example v1.0.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows ${{ matrix.variant }} onedir
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            torch_index: https://download.pytorch.org/whl/cpu
+          - variant: cuda
+            torch_index: https://download.pytorch.org/whl/cu121
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install ${{ matrix.variant }} runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==1.26.4 opencv-python==4.10.0.84 lap>=0.5.12
+          python -m pip install torch==2.3.1 torchvision==0.18.1 --index-url ${{ matrix.torch_index }}
+          python -m pip install .
+          python -m pip install "pyinstaller>=6.14,<7"
+      - name: Build portable onedir archive
+        run: python tools/build_windows_onedir.py --variant ${{ matrix.variant }} --output-dir release
+      - name: Verify archive layout
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem -Path release -Filter "YOLO26-App-${{ matrix.variant }}.zip" | Select-Object -First 1
+          if ($null -eq $archive) {
+            throw "Expected ZIP archive was not created."
+          }
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath extracted -Force
+          $launcher = "extracted/YOLO26-App-${{ matrix.variant }}/YOLO26-App-${{ matrix.variant }}.exe"
+          if (-not (Test-Path $launcher)) {
+            throw "Portable launcher was not found: $launcher"
+          }
+          if (-not (Test-Path "extracted/YOLO26-App-${{ matrix.variant }}/build-info.json")) {
+            throw "Build metadata was not found."
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yolo26-app-windows-${{ matrix.variant }}
+          path: |
+            release/*.zip
+            release/*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: release
+          merge-multiple: true
+      - name: Select release tag
+        id: release_tag
+        shell: bash
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.release_tag.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          prerelease: ${{ inputs.prerelease || false }}
+          files: |
+            release/*.zip
+            release/*.zip.sha256
+          fail_on_unmatched_files: true

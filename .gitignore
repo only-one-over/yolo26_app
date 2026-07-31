@@ -6,6 +6,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+release/
+.local-release-check/
+.onedir-cpu-build-env/
+.pytest-windows-temp/
 *.egg
 .pytest_cache/
 .ruff_cache/

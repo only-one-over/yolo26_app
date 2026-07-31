@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yolo26-app"
-version = "1.0.0"
+version = "1.0.1"
 description = "Ultralytics YOLO Desktop App - Annotation, Training, and Inference (YOLO26 / YOLOv8)"
 readme = "README.md"
 requires-python = ">=3.10"
