@@ -26,6 +26,8 @@ class MediaIndexTests(unittest.TestCase):
 
             index.clear()
             self.assertEqual(index.count(), 0)
+            index.path.unlink()
+            self.assertFalse(index.path.exists())
 
     def test_corrupt_index_is_recreated_without_touching_media(self):
         with tempfile.TemporaryDirectory() as directory:

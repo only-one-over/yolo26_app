@@ -291,10 +291,13 @@ class UiReliabilityTests(unittest.TestCase):
         widget._annotations_dict = {"first.jpg": [], "second.jpg": []}
         widget._image_list_widget.setCurrentRow(0)
 
-        widget._go_to_next_image()
-        self.assertEqual(widget._image_list_widget.currentRow(), 1)
-        widget._go_to_next_image()
-        self.assertEqual(widget._image_list_widget.currentRow(), 1)
+        with patch.object(QApplication, "activeModalWidget", return_value=None), patch.object(
+            QApplication, "focusWidget", return_value=None
+        ):
+            widget._go_to_next_image()
+            self.assertEqual(widget._image_list_widget.currentRow(), 1)
+            widget._go_to_next_image()
+            self.assertEqual(widget._image_list_widget.currentRow(), 1)
         widget.deleteLater()
 
     def test_annotation_cleanup_joins_active_image_load_worker(self):

@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterator, Iterable, Mapping, Sequence
 
 
 INDEX_FILENAME = ".yolo26_media.sqlite3"
@@ -50,6 +51,19 @@ class MediaIndex:
             connection.close()
             raise
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """Commit or roll back an operation, then release the SQLite file handle."""
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def sync_snapshot(
         self, paths: Iterable[str], annotation_counts: Mapping[str, int], source: str = "project"
     ) -> None:
@@ -74,7 +88,7 @@ class MediaIndex:
                     source,
                 )
             )
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("DELETE FROM media")
             connection.executemany(
                 """
@@ -88,7 +102,7 @@ class MediaIndex:
     def upsert(self, paths: Sequence[str], annotation_counts: Mapping[str, int]) -> None:
         if not paths:
             return
-        with self._connect() as connection:
+        with self._connection() as connection:
             for media_path in paths:
                 try:
                     stat = os.stat(media_path)
@@ -107,12 +121,12 @@ class MediaIndex:
                 )
 
     def clear(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("DELETE FROM media")
 
     def count(self) -> int:
         try:
-            with self._connect() as connection:
+            with self._connection() as connection:
                 return int(connection.execute("SELECT COUNT(*) FROM media").fetchone()[0])
         except sqlite3.Error:
             return 0
