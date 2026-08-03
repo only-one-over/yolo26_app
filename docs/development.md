@@ -35,6 +35,17 @@ python -m mypy
 
 UI 测试通过 `QT_QPA_PLATFORM=offscreen` 在无显示环境运行。涉及 GPU、TensorRT、相机或真实模型的测试应增加对应标记，并保持 CPU 环境可运行的单元测试。
 
+### 启动性能基线
+
+应用将阶段耗时追加到工作区 `logs/startup_metrics.jsonl`，不记录媒体路径或图像内容。冷启动测试前删除该文件并首次运行应用；热启动测试保留缓存并再次运行。分别在源码和 Windows `onedir` 包中采样后，生成汇总：
+
+```powershell
+python tools/benchmark_startup.py $HOME/.yolo26_app/workspace/logs/startup_metrics.jsonl --mode cold --output cold_startup
+python tools/benchmark_startup.py $HOME/.yolo26_app/workspace/logs/startup_metrics.jsonl --mode hot --output hot_startup
+```
+
+结果区分窗口可见、界面可交互、项目恢复、媒体索引与首张缩略图就绪时间。使用空项目、约 1,000 图片和约 10,000 图片项目各采样一次；窗口可见与导航可用应保持在 1 秒内。
+
 ## 构建发布包
 
 项目使用 pyproject.toml 定义包元数据、依赖和 GUI entry point。构建命令：
@@ -57,6 +68,12 @@ python -m venv .wheel-test-env
 ~~~
 
 然后验证 yolo26_app 资源和 yolo26-app entry point。GitHub Actions 的 package job 已自动执行构建、源码分发包内容检查、wheel 隔离安装检查并上传 python-distributions artifact。
+
+### 发布到 PyPI
+
+正式发布由 `.github/workflows/publish-pypi.yml` 在推送 `v*` 标签时触发。工作流会重新构建源码包和 wheel，运行 `twine check dist/*`，并通过 PyPI Trusted Publishing 上传产物。
+
+首次发布前，需要在 PyPI 为 `yolo26-app` 配置 Trusted Publisher：GitHub owner 为 `only-one-over`，repository 为 `yolo26_app`，workflow 为 `publish-pypi.yml`，environment 为 `pypi`。同时在 GitHub 创建 `pypi` Environment 并启用人工审批；流程不使用或保存 PyPI API Token。
 
 ## 扩展方式
 

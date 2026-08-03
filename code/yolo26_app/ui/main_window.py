@@ -37,6 +37,7 @@ from yolo26_app.core.logger import get_logger
 from yolo26_app.core.project_manager import ProjectManager
 from yolo26_app.ui.styles import get_style
 from yolo26_app.core.persistence import write_json_atomic
+from yolo26_app.core.startup_metrics import StartupMetrics
 
 if TYPE_CHECKING:
     from yolo26_app.core.gpu_detector import GPUDetectWorker
@@ -111,8 +112,9 @@ class NewProjectDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, metrics: Optional[StartupMetrics] = None) -> None:
         super().__init__()
+        self._metrics = metrics
         # 启动时确保工作区目录结构存在
         from yolo26_app.core.paths import ensure_workspace_dirs
         ensure_workspace_dirs()
@@ -307,10 +309,21 @@ class MainWindow(QMainWindow):
         # 先填充工作区间列表,这样 _restore_app_state 内部调用 _set_project_config
         # 时才能在 ComboBox 中找到对应项并选中
         self._refresh_workspace_combo()
-        self._ensure_widget(0)
-        self._restore_app_state()
-        self._switch_page(self._requested_page_index)
+        self._mark_startup("workspace_list_ready")
+        # Give the shown native window one event-loop turn before loading a project.
+        QTimer.singleShot(0, self._restore_startup_project)
         self._detect_gpu_async()
+
+    def _restore_startup_project(self) -> None:
+        self._ensure_widget(0)
+        self._mark_startup("annotation_widget_ready")
+        self._restore_app_state()
+        self._mark_startup("app_state_restored")
+        self._switch_page(self._requested_page_index)
+
+    def _mark_startup(self, stage: str, **details: object) -> None:
+        if self._metrics is not None:
+            self._metrics.mark(stage, **details)
 
     def _set_project_config(self, config: ProjectConfig) -> None:
         # 注意：调用方（_on_workspace_changed / _restore_app_state）负责在切换前

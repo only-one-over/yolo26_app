@@ -80,6 +80,17 @@ venv\Scripts\python.exe main.py
 yolo26-app
 ~~~
 
+## PyPI 安装
+
+已发布的 Python 包可在新虚拟环境中安装：
+
+~~~bash
+python -m pip install yolo26-app
+yolo26-app
+~~~
+
+PyPI 包不包含模型权重、CUDA/TensorRT、SAM2、Grounding DINO 或 Windows 便携运行时；这些组件按需安装。普通 Windows 用户可继续从 GitHub Release 下载 CPU 或 CUDA 便携包。
+
 ## 基本使用
 
 1. 通过“文件 -> 新建项目”创建工作区。

@@ -125,6 +125,13 @@ class UiReliabilityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def tearDown(self):
+        """Join annotation threads before Qt processes deferred widget deletion."""
+        for widget in QApplication.allWidgets():
+            if isinstance(widget, AnnotateWidget):
+                self.assertTrue(widget.wait_for_background_workers())
+        self.app.processEvents()
+
     def test_lazy_pages_do_not_depend_on_creation_order(self):
         fake_modules = {
             "yolo26_app.ui.annotation": _fake_module(
@@ -289,6 +296,18 @@ class UiReliabilityTests(unittest.TestCase):
         widget._go_to_next_image()
         self.assertEqual(widget._image_list_widget.currentRow(), 1)
         widget.deleteLater()
+
+    def test_annotation_cleanup_joins_active_image_load_worker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "image.jpg"
+            cv2.imwrite(str(image_path), np.zeros((32, 32, 3), dtype=np.uint8))
+
+            widget = AnnotateWidget()
+            widget._load_image(str(image_path))
+
+            self.assertTrue(widget.wait_for_background_workers())
+            self.assertFalse(widget.has_running_background_workers())
+            widget.deleteLater()
 
     def test_project_autosave_is_complete_json(self):
         annotations_path = Path(__file__).parent / "annotations.json"

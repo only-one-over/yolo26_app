@@ -43,7 +43,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest
+      - run: python -m pytest -vv
 
   package:
     name: Build package distributions

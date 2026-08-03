@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import cv2
 import numpy as np
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPointF, QThread, QTimer
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QRectF, QPoint, QPointF, QThread, QTimer
 from PyQt6.QtGui import (
     QPixmap,
     QImage,
@@ -21,6 +21,7 @@ from PyQt6.QtGui import (
     QPolygonF,
     QKeySequence,
     QShortcut,
+    QCloseEvent,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -54,6 +55,7 @@ from yolo26_app.core.annotation_canvas import AnnotationScene, AnnotationView, A
 from yolo26_app.core.config import ClassItem, ProjectConfig
 from yolo26_app.core.label_manager import LabelManager
 from yolo26_app.core.logger import get_logger
+from yolo26_app.core.media_index import MediaIndex
 from yolo26_app.core.persistence import write_json_atomic
 
 if TYPE_CHECKING:
@@ -69,6 +71,7 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv"}
 DEFAULT_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
 MAX_MEDIA_IMPORT_FILES = 50_000
 MAX_VIDEO_FRAMES_PER_FILE = 10_000
+IMAGE_LIST_BATCH_SIZE = 200
 MAX_MODEL_DOWNLOAD_BYTES = 1_100_000_000
 
 
@@ -486,6 +489,34 @@ class _ThumbnailWorker(QThread):
                     self.thumbnail_ready.emit(row, img)
 
 
+class _MediaIndexWorker(QThread):
+    """Update the disposable index outside the GUI thread."""
+
+    indexed = pyqtSignal(int)
+
+    def __init__(self, project_path: str, paths: List[str], annotation_counts: Dict[str, int]) -> None:
+        super().__init__(None)
+        self._project_path = project_path
+        self._paths = paths
+        self._annotation_counts = annotation_counts
+        self._stop_flag = False
+
+    def stop(self) -> None:
+        self._stop_flag = True
+
+    def run(self) -> None:
+        try:
+            if self._stop_flag:
+                return
+            index = MediaIndex(self._project_path)
+            index.sync_snapshot(self._paths, self._annotation_counts)
+            if self._stop_flag:
+                return
+            self.indexed.emit(index.count())
+        except Exception as exc:
+            logger.warning("Media index update failed: %s", exc)
+
+
 class _ImageLoadWorker(QThread):
     image_ready = pyqtSignal(str, object)
     error_signal = pyqtSignal(str, str)
@@ -732,7 +763,12 @@ class AnnotateWidget(QWidget):
         self._batch_progress = None
         self._dino_worker = None
         self._thumb_worker: Optional[_ThumbnailWorker] = None
+        self._media_index_worker: Optional[_MediaIndexWorker] = None
         self._thumbnail_reload_pending = False
+        self._thumbnail_rows: set[int] = set()
+        self._first_thumbnail_recorded = False
+        self._pending_list_paths: List[str] = []
+        self._pending_selected_path = ""
         self._image_load_worker: Optional[_ImageLoadWorker] = None
         self._pending_image_path = ""
         self._media_import_worker: Optional[_MediaImportWorker] = None
@@ -1029,6 +1065,9 @@ class AnnotateWidget(QWidget):
         self._btn_clear_images.clicked.connect(self._clear_imported_images)
         self._btn_export.clicked.connect(self._export_dataset)
         self._image_list_widget.currentItemChanged.connect(self._on_image_selected)
+        self._image_list_widget.verticalScrollBar().valueChanged.connect(
+            lambda _value: self._start_thumbnail_loading()
+        )
         self._btn_add_class.clicked.connect(self._add_class)
         self._btn_remove_class.clicked.connect(self._remove_class)
         self._class_list_widget.currentRowChanged.connect(self._on_class_selected)
@@ -1088,6 +1127,7 @@ class AnnotateWidget(QWidget):
             self._yolo_sam_worker,
             self._dino_worker,
             self._download_worker,
+            self._media_index_worker,
         ]
         return [worker for worker in workers if worker is not None]
 
@@ -1120,6 +1160,34 @@ class AnnotateWidget(QWidget):
         """Compatibility wrapper used during close; never destroys a running worker."""
         self.request_stop_background_workers()
         return not self.has_running_background_workers()
+
+    def wait_for_background_workers(self, timeout_ms: int = 3000) -> bool:
+        """Stop annotation workers and wait for their threads to finish.
+
+        This is intended for controlled teardown paths such as tests. Interactive
+        window closing remains non-blocking and is handled by ``closeEvent``.
+        """
+        self.request_stop_background_workers()
+        for worker in self._background_workers():
+            try:
+                if worker.isRunning() and not worker.wait(timeout_ms):
+                    return False
+            except RuntimeError:
+                continue
+        return not self.has_running_background_workers()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Do not let Qt destroy this widget while an annotation worker is alive."""
+        self.request_stop_background_workers()
+        if self.has_running_background_workers():
+            QMessageBox.warning(
+                self,
+                "任务仍在运行",
+                "标注后台任务正在停止，请等待任务结束后再关闭页面。",
+            )
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _go_to_next_image(self) -> None:
         if QApplication.activeModalWidget() is not None:
@@ -1547,6 +1615,7 @@ class AnnotateWidget(QWidget):
         return True
 
     def _finish_media_import(self, select_first_if_empty: bool = False) -> None:
+        self._upsert_media_index(self._image_list)
         self._start_thumbnail_loading()
         if select_first_if_empty and self._image_list_widget.currentRow() < 0 and self._image_list_widget.count() > 0:
             self._image_list_widget.setCurrentRow(0)
@@ -1573,8 +1642,11 @@ class AnnotateWidget(QWidget):
                 self._thumb_worker = None
 
     def _start_thumbnail_loading(self) -> None:
+        rows = self._visible_thumbnail_rows()
         items = []
-        for row in range(self._image_list_widget.count()):
+        for row in rows:
+            if row in self._thumbnail_rows:
+                continue
             item = self._image_list_widget.item(row)
             path = item.data(Qt.ItemDataRole.UserRole)
             items.append((row, path))
@@ -1608,10 +1680,91 @@ class AnnotateWidget(QWidget):
         self._thumb_worker = worker
         worker.start()
 
+    def _visible_thumbnail_rows(self) -> List[int]:
+        count = self._image_list_widget.count()
+        if not count:
+            return []
+        viewport = self._image_list_widget.viewport()
+        top = self._image_list_widget.indexAt(QPoint(1, 1)).row()
+        bottom = self._image_list_widget.indexAt(QPoint(1, max(1, viewport.height() - 2))).row()
+        if top < 0:
+            top = self._image_list_widget.currentRow()
+        if top < 0:
+            top = 0
+        if bottom < top:
+            # List rows have a fixed compact height in this UI; retain a safe first-screen fallback.
+            bottom = min(count - 1, top + 20)
+        return list(range(max(0, top - 8), min(count, bottom + 9)))
+
+    def _populate_image_list_batched(self, paths: List[str], selected_path: str = "") -> None:
+        """Keep the event loop responsive while a large project list is restored."""
+        self._image_list_widget.clear()
+        self._thumbnail_rows.clear()
+        self._pending_list_paths = list(paths)
+        self._pending_selected_path = selected_path
+        self._append_image_list_batch()
+
+    def _append_image_list_batch(self) -> None:
+        batch = self._pending_list_paths[:IMAGE_LIST_BATCH_SIZE]
+        del self._pending_list_paths[:IMAGE_LIST_BATCH_SIZE]
+        for image_path in batch:
+            self._add_image_item(image_path)
+        if self._pending_list_paths:
+            QTimer.singleShot(0, self._append_image_list_batch)
+            return
+        self._start_thumbnail_loading()
+        selected_path = self._pending_selected_path
+        self._pending_selected_path = ""
+        if selected_path in self._image_list:
+            self._image_list_widget.setCurrentRow(self._image_list.index(selected_path))
+        elif self._image_list:
+            self._image_list_widget.setCurrentRow(0)
+
     def _on_thumbnail_ready(self, row: int, image: QImage) -> None:
         if 0 <= row < self._image_list_widget.count():
             item = self._image_list_widget.item(row)
             item.setIcon(QIcon(QPixmap.fromImage(image)))
+            self._thumbnail_rows.add(row)
+            if not self._first_thumbnail_recorded:
+                self._first_thumbnail_recorded = True
+                window = self.window()
+                if hasattr(window, "_mark_startup"):
+                    window._mark_startup("first_thumbnail_ready", media_count=len(self._image_list))
+
+    def _upsert_media_index(self, paths: List[str]) -> None:
+        config = self._current_project_config()
+        if config is None:
+            return
+        try:
+            MediaIndex(config.project_path).upsert(
+                paths, {path: len(self._annotations_dict.get(path, [])) for path in paths}
+            )
+        except Exception as exc:
+            logger.warning("Media index upsert failed: %s", exc)
+
+    def _sync_media_index_async(self, config: ProjectConfig) -> None:
+        worker = self._media_index_worker
+        if worker is not None and worker.isRunning():
+            return
+        worker = _MediaIndexWorker(
+            config.project_path,
+            list(self._image_list),
+            {path: len(items) for path, items in self._annotations_dict.items()},
+        )
+        worker.indexed.connect(self._on_media_indexed)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda _worker=worker: self._clear_media_index_worker(_worker))
+        self._media_index_worker = worker
+        worker.start()
+
+    def _clear_media_index_worker(self, worker: _MediaIndexWorker) -> None:
+        if self._media_index_worker is worker:
+            self._media_index_worker = None
+
+    def _on_media_indexed(self, count: int) -> None:
+        window = self.window()
+        if hasattr(window, "_mark_startup"):
+            window._mark_startup("media_index_ready", media_count=count)
 
     def _on_image_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:
         if current is None:
@@ -1727,6 +1880,7 @@ class AnnotateWidget(QWidget):
         self._save_current_annotations()
         self._image_list.clear()
         self._annotations_dict.clear()
+        self._thumbnail_rows.clear()
         self._current_image_path = ""
         self._image_list_widget.clear()
         self._scene.clear_annotations()
@@ -1734,6 +1888,12 @@ class AnnotateWidget(QWidget):
         self._scene.clear()
         self._scene.setSceneRect(QRectF())
         self._save_annotations_to_project(force=True)
+        config = self._current_project_config()
+        if config is not None:
+            try:
+                MediaIndex(config.project_path).clear()
+            except Exception as exc:
+                logger.warning("Media index clear failed: %s", exc)
         self._schedule_autosave()
 
     def _add_class(self) -> None:
@@ -2292,6 +2452,9 @@ class AnnotateWidget(QWidget):
         self._current_image_path = ""
         self._image_list.clear()
         self._annotations_dict.clear()
+        self._thumbnail_rows.clear()
+        self._first_thumbnail_recorded = False
+        self._pending_list_paths.clear()
         self._image_list_widget.clear()
         self._scene.clear_annotations()
         if config is None:
@@ -2301,6 +2464,7 @@ class AnnotateWidget(QWidget):
         self._update_class_list()
         self._update_scene_colors()
         self._load_annotations_from_project()
+        self._sync_media_index_async(config)
 
     def save_state(self) -> dict:
         self._save_current_annotations()
@@ -2363,6 +2527,7 @@ class AnnotateWidget(QWidget):
                 ))
             self._annotations_dict[path] = anns
         self._image_list_widget.clear()
+        self._thumbnail_rows.clear()
         for img_path in self._image_list:
             self._add_image_item(img_path)
         self._start_thumbnail_loading()
@@ -2498,14 +2663,7 @@ class AnnotateWidget(QWidget):
                     angle=angle,
                 ))
             self._annotations_dict[abs_path] = anns
-        self._image_list_widget.clear()
-        for img_path in self._image_list:
-            self._add_image_item(img_path)
-        self._start_thumbnail_loading()
         current_path = data.get("current_image_path", "")
         if current_path and not os.path.isabs(current_path):
             current_path = os.path.join(project_path, current_path)
-        if current_path in self._image_list:
-            self._image_list_widget.setCurrentRow(self._image_list.index(current_path))
-        elif self._image_list:
-            self._image_list_widget.setCurrentRow(0)
+        self._populate_image_list_batched(self._image_list, current_path)
