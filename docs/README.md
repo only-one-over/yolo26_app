@@ -9,6 +9,7 @@
 | [环境与模型](environment-and-models.md) | Python、GPU、可选组件、TensorRT 和模型权重 |
 | [开发指南](development.md) | 项目结构、核心模块、测试与扩展方式 |
 | [诊断与排障](troubleshooting.md) | 日志、诊断报告和常见问题 |
+| [v1.0.3 发布说明](releases/v1.0.3.md) | CUDA-Full 离线包、下载选择、内置模型与已知事项 |
 
 ## 阅读建议
 

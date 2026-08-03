@@ -17,17 +17,17 @@ Expand-Archive .\YOLO26-App-CUDA.zip
 
 The script joins the parts and verifies the resulting ZIP checksum before extraction.
 
-The portable distribution contains the application, Python runtime, core dependencies, SVG/YAML resources, LICENSE, README.txt, and build-info.json. It deliberately excludes model weights and user data. On first start, user projects, annotations, models, and logs are created under %USERPROFILE%\.yolo26_app\workspace.
+The CPU and CUDA distributions contain the application, Python runtime, core dependencies, SVG/YAML resources, LICENSE, README.txt, and build-info.json. CUDA-FULL additionally contains its documented pretrained model files. All variants keep user data outside the archive; on first start, user projects, annotations, models, and logs are created under %USERPROFILE%\.yolo26_app\workspace.
 
 SAM2 remains optional in CPU and CUDA archives. CUDA-FULL includes SAM2 Tiny without its optional custom CUDA extension, so its core image segmentation workflow works without requiring a local CUDA Toolkit or NVCC. Grounding DINO, RealSense, and TensorRT remain optional integrations. TensorRT must match the target machine's CUDA environment and is therefore not included in any archive.
 
 ## Creating a Release
 
-The GitHub Actions workflow windows-release.yml builds both variants and publishes them as Release assets.
+The GitHub Actions workflow windows-release.yml builds all three variants and publishes them as Release assets.
 
 1. Create and push a version tag such as v1.0.1, or run **Windows onedir release** manually from the Actions page and enter a new tag.
-2. Wait for both Build Windows cpu onedir and Build Windows cuda onedir jobs to complete.
-3. The final job creates or updates the GitHub Release and uploads the two ZIP files and their .sha256 checksums.
+2. Wait for Build Windows cpu onedir, Build Windows cuda onedir, and Build Windows cuda-full onedir jobs to complete.
+3. The final job creates or updates the GitHub Release and uploads the ZIP files, split archive parts when needed, and their .sha256 checksums.
 
 For a local Windows build, install either CPU or CUDA PyTorch first, install the application and PyInstaller, then run:
 
