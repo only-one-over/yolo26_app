@@ -75,7 +75,11 @@ jobs:
               throw "Missing CUDA-Full runtime resource: $relativePath"
             }
           }
-          if (-not (Test-Path (Join-Path $app '_internal/sam2'))) {
+          $sam2PackagePaths = @(
+            (Join-Path $app 'sam2'),
+            (Join-Path $app '_internal/sam2')
+          )
+          if (-not ($sam2PackagePaths | Where-Object { Test-Path $_ })) {
             throw 'SAM2 package was not collected into CUDA-Full.'
           }
       - name: Verify archive layout

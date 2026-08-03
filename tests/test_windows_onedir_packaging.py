@@ -110,3 +110,8 @@ def test_windows_release_workflow_builds_and_publishes_all_variants() -> None:
     assert "numpy==1.26.4 opencv-python==4.10.0.84 lap>=0.5.12" in install_step["run"]
     assert "SAM2_BUILD_CUDA" in install_step["run"]
     assert "fetch_pretrained_assets.py" in install_step["run"]
+    verify_step = next(
+        step for step in build_job["steps"] if step.get("name") == "Verify CUDA-Full runtime resources"
+    )
+    assert "Join-Path $app 'sam2'" in verify_step["run"]
+    assert "Join-Path $app '_internal/sam2'" in verify_step["run"]
