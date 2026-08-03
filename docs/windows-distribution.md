@@ -1,9 +1,10 @@
 # Windows Portable Distribution
 
-The release workflow produces two Windows x64 portable onedir archives:
+The release workflow produces three Windows x64 portable onedir archives:
 
 - YOLO26-App-CPU.zip: use this on a computer without an NVIDIA GPU.
 - YOLO26-App-CUDA.zip: use this on a computer with a compatible NVIDIA GPU and driver. It bundles CUDA-enabled PyTorch built against CUDA 12.1. It does not install a GPU driver.
+- YOLO26-App-CUDA-FULL.zip: use this on a compatible NVIDIA GPU when offline annotation, training, and inference are required. It bundles CUDA-enabled PyTorch, SAM2 compatibility runtime, SAM2.1 Hiera Tiny, and YOLO26 n/s detection weights.
 
 Download one archive from the GitHub Release page, extract it completely, then start the matching YOLO26-App-<VARIANT>.exe. Do not move only the .exe; it depends on the adjacent files in its onedir folder.
 
@@ -18,7 +19,7 @@ The script joins the parts and verifies the resulting ZIP checksum before extrac
 
 The portable distribution contains the application, Python runtime, core dependencies, SVG/YAML resources, LICENSE, README.txt, and build-info.json. It deliberately excludes model weights and user data. On first start, user projects, annotations, models, and logs are created under %USERPROFILE%\.yolo26_app\workspace.
 
-SAM2, Grounding DINO, RealSense, and TensorRT remain optional integrations. TensorRT must match the target machine's CUDA environment and is therefore not included in either archive.
+SAM2 remains optional in CPU and CUDA archives. CUDA-FULL includes SAM2 Tiny without its optional custom CUDA extension, so its core image segmentation workflow works without requiring a local CUDA Toolkit or NVCC. Grounding DINO, RealSense, and TensorRT remain optional integrations. TensorRT must match the target machine's CUDA environment and is therefore not included in any archive.
 
 ## Creating a Release
 

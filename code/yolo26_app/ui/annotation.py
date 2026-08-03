@@ -1989,10 +1989,11 @@ class AnnotateWidget(QWidget):
         if sam._predictor is None:
             model_info = None
             # SAM2 模型统一存到 system_model/sam2/
+            from yolo26_app.core.bundled_models import bundled_search_dirs
             from yolo26_app.core.paths import SYSTEM_MODEL_SUBDIRS
             sam2_dir = str(SYSTEM_MODEL_SUBDIRS["sam2"])
             os.makedirs(sam2_dir, exist_ok=True)
-            scan_dirs = [sam2_dir]
+            scan_dirs = bundled_search_dirs("sam2")
             for d in scan_dirs:
                 model_info = sam.scan_model_file(d)
                 if model_info:

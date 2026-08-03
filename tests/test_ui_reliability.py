@@ -126,11 +126,10 @@ class UiReliabilityTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def tearDown(self):
-        """Join annotation threads before Qt processes deferred widget deletion."""
+        """Join annotation threads without forcing PyQt deferred deletion on Windows."""
         for widget in QApplication.allWidgets():
             if isinstance(widget, AnnotateWidget):
                 self.assertTrue(widget.wait_for_background_workers())
-        self.app.processEvents()
 
     def test_lazy_pages_do_not_depend_on_creation_order(self):
         fake_modules = {
@@ -236,6 +235,18 @@ class UiReliabilityTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertFalse(event.isAccepted())
         widget._trainer = None
+        widget.deleteLater()
+
+    def test_training_completion_keeps_curves_visible_until_results_are_requested(self):
+        widget = training_ui.TrainWidget()
+
+        widget._on_finished("训练完成!\n最佳模型: runs/train/weights/best.pt\n\n指标:\nmAP50: 0.9")
+
+        self.assertEqual(widget.curves_tab.currentIndex(), 0)
+        self.assertFalse(widget.results_group.isVisible())
+        self.assertFalse(widget.results_toggle_btn.isHidden())
+        widget._toggle_results()
+        self.assertFalse(widget.results_group.isHidden())
         widget.deleteLater()
 
     def test_annotation_stop_preserves_reference_until_worker_finishes(self):

@@ -52,6 +52,18 @@ def test_cuda_variant_and_invalid_variant_handling(tmp_path: Path) -> None:
         raise AssertionError("Invalid variant should be rejected.")
 
 
+def test_cuda_full_collects_sam2_and_pretrained_assets(tmp_path: Path) -> None:
+    module = _load_build_module()
+
+    args, app_dir = module.build_pyinstaller_args(PROJECT_ROOT, "cuda-full", tmp_path)
+
+    assert app_dir.name == "YOLO26-App-CUDA-FULL"
+    for package in ("sam2", "sam2_configs", "hydra", "omegaconf", "iopath"):
+        assert package in args
+    pretrained_source = str(PROJECT_ROOT / "assets" / "pretrained")
+    assert any(argument.startswith(pretrained_source) for argument in args)
+
+
 def test_large_release_archive_is_split_with_reassembly_metadata(tmp_path: Path) -> None:
     module = _load_build_module()
     archive = tmp_path / "YOLO26-App-CUDA.zip"
@@ -72,18 +84,21 @@ def test_large_release_archive_is_split_with_reassembly_metadata(tmp_path: Path)
     assert "Get-FileHash" in assets[-1].read_text(encoding="utf-8")
 
 
-def test_windows_release_workflow_builds_and_publishes_both_variants() -> None:
+def test_windows_release_workflow_builds_and_publishes_all_variants() -> None:
     workflow_path = PROJECT_ROOT / ".github" / "workflows" / "windows-release.yml"
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
 
     build_job = workflow["jobs"]["build"]
     variants = build_job["strategy"]["matrix"]["include"]
 
-    assert {item["variant"] for item in variants} == {"cpu", "cuda"}
+    assert {item["variant"] for item in variants} == {"cpu", "cuda", "cuda-full"}
     assert {item["torch_index"] for item in variants} == {
         "https://download.pytorch.org/whl/cpu",
         "https://download.pytorch.org/whl/cu121",
     }
+    cuda_full = next(item for item in variants if item["variant"] == "cuda-full")
+    assert cuda_full["torch_version"] == "2.5.1"
+    assert cuda_full["torchvision_version"] == "0.20.1"
     assert workflow["jobs"]["release"]["needs"] == "build"
     assert workflow["jobs"]["release"]["permissions"]["contents"] == "write"
     release_files = workflow["jobs"]["release"]["steps"][-1]["with"]["files"]
@@ -93,3 +108,5 @@ def test_windows_release_workflow_builds_and_publishes_both_variants() -> None:
         step for step in build_job["steps"] if step.get("name") == "Install ${{ matrix.variant }} runtime"
     )
     assert "numpy==1.26.4 opencv-python==4.10.0.84 lap>=0.5.12" in install_step["run"]
+    assert "SAM2_BUILD_CUDA" in install_step["run"]
+    assert "fetch_pretrained_assets.py" in install_step["run"]

@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
         self._last_successful_workspace = ""
         self._gpu_detect_worker: Optional["GPUDetectWorker"] = None
         self._env_check_worker = None
+        self._bundled_model_install_worker = None
         self.annotate_widget: Optional["AnnotateWidget"] = None
         self.train_widget: Optional["TrainWidget"] = None
         self.test_widget: Optional["TestWidget"] = None
@@ -500,7 +501,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "annotate_widget") and self.annotate_widget is not None:
             if self.annotate_widget.has_running_background_workers():
                 return True
-        for attribute in ("_env_check_worker", "_gpu_detect_worker"):
+        for attribute in (
+            "_env_check_worker",
+            "_gpu_detect_worker",
+            "_bundled_model_install_worker",
+        ):
             worker = getattr(self, attribute, None)
             if worker is not None:
                 try:
@@ -519,7 +524,11 @@ class MainWindow(QMainWindow):
             self.test_widget.request_stop_background_workers()
         if hasattr(self, "annotate_widget") and self.annotate_widget is not None:
             self.annotate_widget.request_stop_background_workers()
-        for attribute in ("_env_check_worker", "_gpu_detect_worker"):
+        for attribute in (
+            "_env_check_worker",
+            "_gpu_detect_worker",
+            "_bundled_model_install_worker",
+        ):
             worker = getattr(self, attribute, None)
             if worker is not None:
                 try:

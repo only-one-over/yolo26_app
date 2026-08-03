@@ -200,6 +200,15 @@ class SAMAnnotator:
             abs_path = os.path.join(self._sam2_package_dir, config_path)
             if os.path.isfile(abs_path):
                 return abs_path
+        try:
+            from importlib.resources import files
+
+            resource_path = config_path.removeprefix("configs/")
+            bundled_path = files("sam2_configs").joinpath(resource_path)
+            if bundled_path.is_file():
+                return str(bundled_path)
+        except (ImportError, ModuleNotFoundError):
+            pass
         return config_path
 
     @staticmethod

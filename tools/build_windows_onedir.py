@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-VARIANTS = ("cpu", "cuda")
+VARIANTS = ("cpu", "cuda", "cuda-full")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAX_ASSET_SIZE_MIB = 1900
 
@@ -73,6 +73,15 @@ def build_pyinstaller_args(
         "yolo26_app/core",
     )
     args += add_data(project_root / "code" / "yolo26_app" / "ui" / "icons", "yolo26_app/ui/icons")
+    if variant == "cuda-full":
+        args += [
+            "--collect-all", "sam2",
+            "--collect-all", "sam2_configs",
+            "--collect-all", "hydra",
+            "--collect-all", "omegaconf",
+            "--collect-all", "iopath",
+        ]
+        args += add_data(project_root / "assets" / "pretrained", "pretrained")
     args.append(str(project_root / "main.py"))
     return args, app_dir
 
@@ -104,7 +113,14 @@ def write_distribution_files(app_dir: Path, variant: str) -> None:
         "torch": package_version("torch"),
         "torch_cuda": torch_cuda,
         "ultralytics": package_version("ultralytics"),
+        "bundled_models": [],
     }
+    manifest = app_dir / "pretrained" / "manifest.json"
+    if manifest.is_file():
+        try:
+            metadata["bundled_models"] = [item["name"] for item in json.loads(manifest.read_text("utf-8"))["models"]]
+        except (KeyError, OSError, ValueError, TypeError):
+            pass
     (app_dir / "build-info.json").write_text(
         json.dumps(metadata, ensure_ascii=True, indent=2) + "\n", encoding="utf-8"
     )
@@ -123,7 +139,8 @@ def write_distribution_files(app_dir: Path, variant: str) -> None:
                 "User projects, annotations, models, and logs are stored in:",
                 "%USERPROFILE%\\.yolo26_app\\workspace",
                 "",
-                "TensorRT, SAM2, Grounding DINO, and RealSense remain optional dependencies.",
+                "TensorRT, Grounding DINO, and RealSense remain optional dependencies.",
+                "CUDA-FULL additionally includes SAM2 Tiny and YOLO26 n/s pretrained models.",
                 "",
             ]
         ),
@@ -208,6 +225,15 @@ def split_release_archive(archive: Path, max_asset_size: int) -> list[Path]:
 def build(variant: str, output_dir: Path, max_asset_size: int) -> list[Path]:
     """Run PyInstaller and archive a completed portable distribution."""
     args, app_dir = build_pyinstaller_args(PROJECT_ROOT, variant, output_dir)
+    if variant == "cuda-full":
+        manifest = PROJECT_ROOT / "assets" / "pretrained" / "manifest.json"
+        try:
+            assets = json.loads(manifest.read_text(encoding="utf-8"))["models"]
+            missing = [item["destination"] for item in assets if not (manifest.parent / item["destination"]).is_file()]
+        except (KeyError, OSError, ValueError, TypeError) as exc:
+            raise RuntimeError("CUDA-Full pretrained asset manifest is invalid.") from exc
+        if missing:
+            raise RuntimeError(f"CUDA-Full pretrained assets are missing: {', '.join(missing)}")
     if app_dir.exists():
         shutil.rmtree(app_dir)
 

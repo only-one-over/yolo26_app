@@ -425,6 +425,10 @@ class TrainWidget(QWidget):
 
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
+        self.results_toggle_btn = QPushButton("查看训练结果")
+        self.results_toggle_btn.setVisible(False)
+        self.results_toggle_btn.clicked.connect(self._toggle_results)
+        btn_layout.addWidget(self.results_toggle_btn)
         right_layout.addLayout(btn_layout)
 
         # ===== 训练曲线可视化面板 =====
@@ -510,6 +514,12 @@ class TrainWidget(QWidget):
         self._splitter.setStretchFactor(1, 2)
         # 设置初始 splitter 位置（右侧约 400px）
         self._splitter.setSizes([600, 400])
+
+    def _toggle_results(self) -> None:
+        """Expand the completion summary only when the user asks for it."""
+        visible = not self.results_group.isVisible()
+        self.results_group.setVisible(visible)
+        self.results_toggle_btn.setText("隐藏训练结果" if visible else "查看训练结果")
 
     def _update_model_info(self, size: str) -> None:
         self._model_info_label.setText(MODEL_INFO.get(size, ""))
@@ -882,6 +892,7 @@ class TrainWidget(QWidget):
         self.progress_bar.setValue(0)
         self.status_label.setText("训练中...")
         self.results_group.hide()
+        self.results_toggle_btn.setVisible(False)
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -998,7 +1009,7 @@ class TrainWidget(QWidget):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._set_form_enabled(True)
-        self.status_label.setText("训练完成")
+        self.status_label.setText("训练完成，曲线已更新")
 
         lines = message.split("\n")
         model_path = ""
@@ -1019,7 +1030,10 @@ class TrainWidget(QWidget):
         else:
             self.result_metrics_label.setText("指标: 训练已完成")
 
-        self.results_group.show()
+        self.results_group.hide()
+        self.results_toggle_btn.setText("查看训练结果")
+        self.results_toggle_btn.setVisible(True)
+        self.curves_tab.setCurrentIndex(0)
 
         # 加载 PNG 图表
         if self._current_save_dir is not None:
